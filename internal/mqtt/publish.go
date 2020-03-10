@@ -6,7 +6,10 @@ import (
 )
 
 // Publish publishes a string message on a MQTT topic
-// TODO: Add WILL, QOS
+// TODO: Handle Connection options - WILL, QOS
+// TODO: Handle Publishing options - QoS
+// TODO: Consider having a Connection that Publish is an operation on
+//
 func Publish(broker string, topic string, message string) {
 
 	conn, err := Connect(broker, "H3LLTest")
