@@ -38,8 +38,8 @@ func (r *ConnectRequest) remainingLength() int {
 		result += len(r.options.UserName)
 		count++
 	}
-	if r.options.Password != "" {
-		result += len(r.options.Password)
+	if r.options.Password != nil {
+		result += len(*r.options.Password)
 		count++
 	}
 	// lengths + 2 bytes per included item for its 16 bits length
@@ -74,7 +74,7 @@ func (r *ConnectRequest) connectBits() byte {
 		connectBits |= UserNameFlag
 	}
 
-	if r.options.Password != "" {
+	if r.options.Password != nil {
 		connectBits |= PasswordFlag
 	}
 	return connectBits
@@ -122,7 +122,7 @@ func (r *ConnectRequest) WriteTo(writer io.Writer) (n int64, err error) {
 	}
 
 	if connectBits&PasswordFlag != 0 {
-		EncodeStringTo(r.options.Password, &data)
+		EncodeBytesTo(*r.options.Password, &data)
 	}
 
 	written, err := writer.Write(data.Bytes())
@@ -173,7 +173,7 @@ type ConnectOptions struct {
 	WillQoS          int
 	WillRetain       bool
 	UserName         string
-	Password         string
+	Password         *[]byte
 }
 
 // ConnectOption is an Options-modifying-function
@@ -275,9 +275,9 @@ func UserName(value string) ConnectOption {
 }
 
 // Password returns a ConnectionOption for Password
-func Password(value string) ConnectOption {
+func Password(value []byte) ConnectOption {
 	return func(o *ConnectOptions) error {
-		o.Password = value
+		o.Password = &value
 		return nil
 	}
 }
