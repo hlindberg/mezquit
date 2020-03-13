@@ -35,3 +35,19 @@ func EncodeVariableIntTo(value int, to *bytes.Buffer) int {
 	fmt.Printf("\n")
 	return len(bytes)
 }
+
+// EncodeStringTo encodes a given string into the given buffer - 16 bit length + the content
+func EncodeStringTo(value string, to *bytes.Buffer) {
+	strLength := len(value)
+	to.WriteByte(byte(strLength >> 8))
+	to.WriteByte(byte(strLength & 0xFF))
+	to.WriteString(value)
+}
+
+// EncodeBytesTo encodes a given []bytes] into the given buffer - 16 bit length + the content
+func EncodeBytesTo(value []byte, to *bytes.Buffer) {
+	bytesLength := len(value)
+	to.WriteByte(byte(bytesLength >> 8))
+	to.WriteByte(byte(bytesLength & 0xFF))
+	to.Write(value)
+}

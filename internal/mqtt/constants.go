@@ -22,7 +22,7 @@ const (
 	// UnencryptedPortTCP is the standard MQTT port over TCP for unencrypted content
 	UnencryptedPortTCP = "1883"
 
-	// Connct bits
+	// Connect bits
 
 	// UserNameFlag is a bit that signals that UserName is in the payload
 	UserNameFlag = 1 << 7

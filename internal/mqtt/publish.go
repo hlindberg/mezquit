@@ -12,7 +12,7 @@ import (
 //
 func Publish(broker string, topic string, message string) {
 
-	conn, err := Connect(broker, "H3LLTest")
+	conn, err := Connect(broker, ClientName("H3LLTest"))
 	if err != nil {
 		panic(err)
 	}
