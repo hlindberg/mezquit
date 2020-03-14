@@ -51,3 +51,10 @@ func EncodeBytesTo(value []byte, to *bytes.Buffer) {
 	to.WriteByte(byte(bytesLength & 0xFF))
 	to.Write(value)
 }
+
+// Encode16BitIntTo encodes a given int as 16 bits big endian value into the buffer
+//
+func Encode16BitIntTo(value int, to *bytes.Buffer) {
+	to.WriteByte(byte(value >> 8))
+	to.WriteByte(byte(value & 0xFF))
+}

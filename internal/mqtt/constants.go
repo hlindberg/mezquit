@@ -80,15 +80,15 @@ const (
 	// QoSTwo sets the QoS to 1 (two bits (3, 4) are set)
 	QoSTwo = 2 << 1
 
-	// NoDup sets the DUP bit to 0 (since it is 0 it isn't really needed)
-	NoDup = 0
+	// NoDupBit sets the DUP bit to 0 (since it is 0 it isn't really needed)
+	NoDupBit = 0
 
-	// Dup sets the DUP bit to 1 (since it is 0 it isn't really needed)
-	Dup = 1 << 3
+	// DupBit sets the DUP bit to 1 (since it is 0 it isn't really needed)
+	DupBit = 1 << 3
 
-	// NoRetain sets the RETAIN bit to 0 (since it is 0 it isn't really needed)
-	NoRetain = 0
+	// NoRetainBit sets the RETAIN bit to 0 (since it is 0 it isn't really needed)
+	NoRetainBit = 0
 
-	// Retain sets the RETAIN bit to 1 (since it is 0 it isn't really needed)
-	Retain = 1
+	// RetainBit sets the RETAIN bit to 1 (since it is 0 it isn't really needed)
+	RetainBit = 1
 )

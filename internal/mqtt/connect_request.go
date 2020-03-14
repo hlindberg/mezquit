@@ -6,7 +6,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/google/uuid"
+	"github.com/lithammer/shortuuid"
 )
 
 // ConnectRequest describes a MQTT Connect
@@ -139,7 +139,7 @@ func NewConnectRequest(options ...ConnectOption) *ConnectRequest {
 	opts := DefaultConnectOptions()
 	for _, fOpt := range options {
 		if err := fOpt(&opts); err != nil {
-			log.Fatalf("Connection option failure: %s", err)
+			log.Fatalf("Connection option apply failure: %s", err)
 		}
 	}
 	return &ConnectRequest{options: opts}
@@ -155,10 +155,10 @@ func DefaultConnectOptions() ConnectOptions {
 }
 
 // RandomClientID returns a random UUID string that can be used as ClientName in a Connection.
+// A Short UUID - a Base 57 encoded string is returned.
 //
 func RandomClientID() string {
-	defaultClient, _ := uuid.NewUUID()
-	return defaultClient.String()
+	return shortuuid.New()
 }
 
 // ConnectOptions contains options for a ConnectRequest
@@ -258,7 +258,7 @@ func WillRetain(value bool) ConnectOption {
 // WillQoS returns a ConnectionOption for WillQoS
 func WillQoS(value int) ConnectOption {
 	if value < 0 || value > 2 {
-		panic(fmt.Sprintf("WillQoS cannot must be 0, 1, or 2, got %d", value))
+		panic(fmt.Sprintf("WillQoS must be 0, 1, or 2, got %d", value))
 	}
 	return func(o *ConnectOptions) error {
 		o.WillQoS = value
