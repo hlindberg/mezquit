@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+	"net"
+
 	"github.com/hlindberg/mezquit/internal/mqtt"
 	"github.com/spf13/cobra"
 )
@@ -12,8 +15,29 @@ var publishCmd = &cobra.Command{
 
 	`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Call the busn logic
-		mqtt.Publish(MQQTBroker, Topic, Message)
+
+		// This MQTT client uses a hard coded broker and unencrypted TCP port
+		// It gives the resulting conn as both Input and Output to a MQTT Session
+		//
+		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", MQQTBroker, mqtt.UnencryptedPortTCP))
+		if err != nil {
+			panic(err)
+		}
+
+		session := mqtt.NewSession(mqtt.ClientID("H3LLTest"), mqtt.InputOutput(conn))
+		err = session.Connect()
+		if err != nil {
+			panic(err)
+		}
+
+		session.Publish(mqtt.Message([]byte(Message)),
+			mqtt.Topic(Topic),
+			mqtt.QoS(0),
+			mqtt.Retain(false),
+		)
+
+		// Done
+		conn.Close()
 	},
 
 	Args: func(cmd *cobra.Command, args []string) error {

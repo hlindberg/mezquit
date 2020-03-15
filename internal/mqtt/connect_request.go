@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-
-	"github.com/lithammer/shortuuid"
 )
 
 // ConnectRequest describes a MQTT Connect
@@ -145,6 +143,12 @@ func NewConnectRequest(options ...ConnectOption) *ConnectRequest {
 	return &ConnectRequest{options: opts}
 }
 
+// IsCleanSession returns true if a clean session was requested
+//
+func (r *ConnectRequest) IsCleanSession() bool {
+	return r.options.CleanSession
+}
+
 // DefaultConnectOptions returns the default options for making a MQTT connect using 3.1.1,
 // a clean session, and with 10 seconds keep alive. ClientName is set to an empty string
 // which may not be honored by all MQTT brokers. Use RandomClientID() function to produce
@@ -152,13 +156,6 @@ func NewConnectRequest(options ...ConnectOption) *ConnectRequest {
 //
 func DefaultConnectOptions() ConnectOptions {
 	return ConnectOptions{Level: 4, CleanSession: true, KeepAliveSeconds: 10, ClientName: "", WillRetain: false}
-}
-
-// RandomClientID returns a random UUID string that can be used as ClientName in a Connection.
-// A Short UUID - a Base 57 encoded string is returned.
-//
-func RandomClientID() string {
-	return shortuuid.New()
 }
 
 // ConnectOptions contains options for a ConnectRequest
