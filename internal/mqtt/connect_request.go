@@ -81,7 +81,7 @@ func (r *ConnectRequest) connectBits() byte {
 // WriteTo writes the ConnectRequest to the given io.Writer
 //
 func (r *ConnectRequest) WriteTo(writer io.Writer) (n int64, err error) {
-	var data bytes.Buffer
+	var data bytes.Buffer // 64 bytes in the first Grow which should be enough unless client ID is very long (not worth optimizing)
 
 	connectBits := r.connectBits()
 	keepAlive := r.options.KeepAliveSeconds

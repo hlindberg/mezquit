@@ -63,13 +63,15 @@ func (r *PublishRequest) fixedHeaderBits() byte {
 // WriteTo writes the PublishRequest to the given io.Writer
 //
 func (r *PublishRequest) WriteTo(writer io.Writer) (n int64, err error) {
-	var data bytes.Buffer
+	var data bytes.Buffer // 64 bytes
 
 	// FIXED HEADER
 	data.WriteByte(r.fixedHeaderBits())
 
 	// REMAINING LENGTH
-	EncodeVariableIntTo(r.remainingLength(), &data)
+	rl := r.remainingLength()
+	EncodeVariableIntTo(rl, &data)
+	data.Grow(rl) // ensure all to be written fits using only one buffer allocation
 
 	// VARIABLE HEADER
 	EncodeStringTo(r.options.Topic, &data)
