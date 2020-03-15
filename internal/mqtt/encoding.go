@@ -3,6 +3,8 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // EncodeVariableInt Produces a []byte with the integer encoded as a MQTT variable int
@@ -28,11 +30,17 @@ func EncodeVariableInt(value int) []byte {
 func EncodeVariableIntTo(value int, to *bytes.Buffer) int {
 	bytes := EncodeVariableInt(value)
 	to.Write(bytes)
-	fmt.Printf("Encoded Length %d as (%d) bytes: ", value, len(bytes))
-	for _, b := range bytes {
-		fmt.Printf("%d", b)
+
+	if log.IsLevelEnabled(log.DebugLevel) {
+		var hexBytes string
+		for _, b := range bytes {
+			if len(hexBytes) != 0 {
+				hexBytes += ", "
+			}
+			hexBytes += fmt.Sprintf("0x%x", b)
+		}
+		log.Debugf("Encoded Length %d into %d byte(s): [%s]", value, len(bytes), hexBytes)
 	}
-	fmt.Printf("\n")
 	return len(bytes)
 }
 

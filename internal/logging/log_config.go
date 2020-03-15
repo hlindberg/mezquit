@@ -19,3 +19,10 @@ func SetLevelFromName(levelName string) {
 	log.SetLevel(level)
 	log.Info(fmt.Sprintf("Loglevel set to %s", levelName))
 }
+
+// LoggedErrorf produces an error that is returned after having logged it at Error Level
+func LoggedErrorf(format string, values ...interface{}) error {
+	err := fmt.Errorf(format, values...)
+	log.Error(err)
+	return err
+}
