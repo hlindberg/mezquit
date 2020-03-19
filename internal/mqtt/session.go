@@ -14,8 +14,17 @@ import (
 // the responsability of the caller (open/dial, close, reconnect, etc.)
 //
 type Session struct {
-	options  SessionOptions
-	InFlight map[int]interface{} // map of packed ID in flight
+	freeNumbers     chan int
+	returnedNumbers chan int
+	options         SessionOptions
+	inFlight        *inFlight
+}
+
+func (s *Session) initInFlight(doClean bool) {
+	// Clear the InFlight if this is first connect, or explicitly asking for a CleanSession
+	if s.inFlight == nil || doClean {
+		s.inFlight = newInFlight()
+	}
 }
 
 // Connect connects to a MQTT broker and returns after having received a CONNACK
@@ -31,11 +40,8 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	// Create a request (override the client name by appending it - thus overwriting what user gave)
 	options = append(options, ClientName(s.options.ClientName))
 	connectionRequest := NewConnectRequest(options...)
+	s.initInFlight(connectionRequest.IsCleanSession())
 
-	// Clear the InFlight if this is first connect, or explicitly asking for a CleanSession
-	if s.InFlight == nil || connectionRequest.IsCleanSession() {
-		s.InFlight = make(map[int]interface{})
-	}
 	// Send CONNECT
 	_, err := connectionRequest.WriteTo(s.options.Writer)
 	// TODO: Log the write in debug
