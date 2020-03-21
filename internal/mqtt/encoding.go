@@ -3,6 +3,7 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -26,6 +27,28 @@ func EncodeVariableInt(value int) []byte {
 	return data.Bytes()
 }
 
+// DecodeVariableInt Decodes a variable int value in the Reader stream, consumes it and returns the
+// value.
+func DecodeVariableInt(reader io.Reader) (int, error) {
+	multiplier := 1
+	value := 0
+	for {
+		buf := make([]byte, 1)
+		reader.Read(buf)
+		encodedByte := buf[0]
+		value += int((encodedByte & 127)) * multiplier
+		multiplier *= 128
+
+		if multiplier > 128*128*128 {
+			return 0, fmt.Errorf("Malformed Remaining Length")
+		}
+		if (encodedByte & 128) == 0 {
+			break
+		}
+	}
+	return value, nil
+}
+
 // EncodeVariableIntTo encodes a given int into the given Buffer using MQTT variable int and return the written length
 func EncodeVariableIntTo(value int, to *bytes.Buffer) int {
 	bytes := EncodeVariableInt(value)
@@ -43,6 +66,8 @@ func EncodeVariableIntTo(value int, to *bytes.Buffer) int {
 	}
 	return len(bytes)
 }
+
+// TODO: DecodeVariableInt
 
 // EncodeStringTo encodes a given string into the given buffer - 16 bit length + the content
 func EncodeStringTo(value string, to *bytes.Buffer) {

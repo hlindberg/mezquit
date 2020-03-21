@@ -35,7 +35,7 @@ var publishCmd = &cobra.Command{
 			mqtt.QoS(0),
 			mqtt.Retain(false),
 		)
-
+		session.Disconnect(true, 0)
 		// Done
 		conn.Close()
 	},

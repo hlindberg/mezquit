@@ -1,9 +1,12 @@
 package mqtt
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"log"
+	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/lithammer/shortuuid"
 )
@@ -18,6 +21,8 @@ type Session struct {
 	returnedNumbers chan int
 	options         SessionOptions
 	inFlight        *inFlight
+	stopAfter       chan int
+	stopped         chan bool
 }
 
 func (s *Session) initInFlight(doClean bool) {
@@ -87,7 +92,125 @@ func (s *Session) Connect(options ...ConnectOption) error {
 		return fmt.Errorf("Did not get ConnectionAccepted return status back - got %d", response[3])
 	}
 
+	// Start a lister goroutine that listens on the connection and a channel where a timeout can be received
+	// signalling that it should stop after that timeout (or 0).
+	s.HandleMessages()
+
 	return nil
+}
+
+// Disconnect disconnects the MQTT session from the broker in an orderly fashion by sending a DISCONNECT message
+// The `drain` parameter, if set to `true` will ensure that the Session will wait at least the given `timeout` in seconds
+// to allow messages in flight to be processed. The disconnect will be sent as soon as the in-flight message set is empty
+// or the timeout occurs. If `drain` is set to `false`, processing of incoming ACKS will stop as soon as possible and
+// the DISCONNECT is then sent.
+//
+func (s *Session) Disconnect(drain bool, timeout int) error {
+
+	// TODO: Sending should be done on a queue to enable sending a DISCONNECT without any
+	// concurrency issues.
+
+	// TODO: send to s.stopAfter to stop the message handler
+	s.stopAfter <- timeout
+
+	// Wait for handler to stop
+	_ = <-s.stopped
+
+	var data bytes.Buffer
+	data.WriteByte(byte(DisconnectType<<4 | Reserved))
+	data.WriteByte(0)
+
+	_, err := s.options.Writer.Write(data.Bytes())
+	return err
+}
+
+// HandleMessages starts go routines that listens for incoming ACK and performs the required housekeeping
+// of messages in flight.
+// Note that a client should call `Disconnect` for an orderly disconnect - that will also optionally do a drain with
+// a timeout.
+//
+func (s *Session) HandleMessages() {
+
+	go func() {
+		timeout := make(chan bool)
+		headers := make(chan byte)
+		conerror := make(chan error)
+
+		go func() {
+			fixedHeader := make([]byte, 1)
+			for {
+				n, err := s.options.Reader.Read(fixedHeader)
+				if err != nil {
+					conerror <- err
+					if err == io.EOF {
+						break // stop loop, connection is closed
+					}
+				}
+				if n != 1 {
+					conerror <- fmt.Errorf("Read of one byte did not read a byte")
+					// TODO: What to do here? Stop the loop?
+				}
+				// TODO: Headers should be buffered to handle multiple in flight
+				headers <- fixedHeader[0]
+			}
+		}()
+
+		for {
+			select {
+			case cancelTimeout := <-s.stopAfter:
+				// When receiving information to stop after a timeout on drain, set a timer that will be selected
+				// instead of blocking on a read from the broker
+				//
+				go func() {
+					time.Sleep(time.Duration(cancelTimeout) * time.Second)
+					timeout <- true
+				}()
+
+			case <-timeout:
+				// Asked to stop after timeout - it now timed out, so stop waiting for headers
+				s.stopped <- true
+				break
+
+			case header := <-headers:
+				// read a header byte call specific handlers
+				msgType := header >> 4
+				switch msgType {
+				case PublishAckType:
+					s.processPublishAck(msgType)
+				default:
+					// TODO: for now panic as this logic will not correctly read the message to clear for next
+					panic(fmt.Sprintf("Unhandles message type %d - not yet implemented", msgType))
+				}
+			}
+		}
+	}()
+}
+
+func (s *Session) processPublishAck(fixedHeaderByte byte) {
+	// Must read a byte having value 2 (additional bytes PackageID)
+	// Must free this waiting packet
+	// Error if receiving an ACK for non waiting message ? Already ACKed or never sent ?
+
+	threeBytes := make([]byte, 3)
+	n, err := s.options.Reader.Read(threeBytes)
+
+	// How to deal with an error here?
+	if err != nil {
+		panic(fmt.Sprintf("Error while reading a PUBACK: %s", err))
+	}
+	if n != 3 {
+		panic(fmt.Sprintf("Expected to read 3 bytes when reading PUBACK - read %d", n))
+	}
+	if threeBytes[0] != 2 {
+		panic(fmt.Sprintf("Expected to read a first byte of value 2 (length) when reading PUBACK - read %d", threeBytes[0]))
+	}
+	packetID := int(threeBytes[1])<<8 | int(threeBytes[2])
+
+	// Packet is no longer waiting since this is QoS 1
+	s.inFlight.releaseWaiting(packetID)
+
+	// Mark packetID as available
+	s.inFlight.unsetBit(packetID)
 }
 
 // Publish publishes to a MQTT broker and if QoS is > 0 handles the ACK messages that follows
@@ -131,7 +254,7 @@ func NewSession(options ...SessionOption) *Session {
 		}
 	}
 
-	return &Session{options: opts}
+	return &Session{options: opts, stopAfter: make(chan int), stopped: make(chan bool)}
 }
 
 // ReEstablish enables modifying the Input/Output options of an existing Session (i.e. for a new network connection).

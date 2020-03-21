@@ -16,6 +16,12 @@ const (
 	// PublishType control message type
 	PublishType = 3
 
+	// PublishAckType control message type
+	PublishAckType = 4
+
+	// DisconnectType control message type
+	DisconnectType = 14
+
 	// CONNECTION PORTS
 	// ----------------
 

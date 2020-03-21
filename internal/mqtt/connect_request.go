@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // ConnectRequest describes a MQTT Connect
@@ -90,7 +91,9 @@ func (r *ConnectRequest) WriteTo(writer io.Writer) (n int64, err error) {
 	data.WriteByte(ConnectType<<4 | Reserved)
 
 	// REMAINING LENGTH - VARIABLE HEADER LENGTH (always 10 for connect) + PAYLOAD LENGTH
-	EncodeVariableIntTo(10+r.remainingLength(), &data)
+	v := 10 + r.remainingLength()
+	log.Printf("Connect variable lenght is %d\n", v)
+	EncodeVariableIntTo(v, &data)
 
 	// Connect variable part            Byte   Description
 	//                                  ------ ----------------------------------------------
