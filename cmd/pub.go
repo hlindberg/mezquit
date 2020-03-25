@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/hlindberg/mezquit/internal/mqtt"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -21,12 +22,15 @@ var publishCmd = &cobra.Command{
 		// This MQTT client uses a hard coded broker and unencrypted TCP port
 		// It gives the resulting conn as both Input and Output to a MQTT Session
 		//
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", MQQTBroker, mqtt.UnencryptedPortTCP))
+		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", MQTTBroker, mqtt.UnencryptedPortTCP))
 		if err != nil {
 			panic(err)
 		}
-
-		session := mqtt.NewSession(mqtt.ClientID("H3LLTest"), mqtt.InputOutput(conn))
+		if MQTTClientName == "" {
+			MQTTClientName = mqtt.RandomClientID()
+			log.Infof("Using generated client ID %s", MQTTClientName)
+		}
+		session := mqtt.NewSession(mqtt.ClientID(MQTTClientName), mqtt.InputOutput(conn))
 		err = session.Connect()
 		if err != nil {
 			panic(err)
@@ -65,8 +69,11 @@ var publishCmd = &cobra.Command{
 	},
 }
 
-// MQQTBroker is the MQTT host:port to dial
-var MQQTBroker string
+// MQTTBroker is the MQTT host:port to dial
+var MQTTBroker string
+
+// MQTTClientName is the MQTT client name - a short UUID by default
+var MQTTClientName string
 
 // Topic is the MQTT topic to publish to
 var Topic string
@@ -84,7 +91,8 @@ func init() {
 	RootCmd.AddCommand(publishCmd)
 	flags := publishCmd.PersistentFlags()
 
-	flags.StringVarP(&MQQTBroker, "broker", "b", "localhost", "the MQTT Broker host to connect to (default 'localhost')")
+	flags.StringVarP(&MQTTBroker, "broker", "b", "localhost", "the MQTT Broker host to connect to (default 'localhost')")
+	flags.StringVarP(&MQTTClientName, "client", "c", "", "the MQTT client name to use - default is a short UUID")
 	flags.StringVarP(&Topic, "topic", "t", "test", "the MQTT topic to send message to (default 'test')")
 	flags.StringVarP(&Message, "message", "m", "", "the message to send")
 	flags.IntVarP(&QoS, "qos", "q", 0, "Quality of service 0-2 (default 0)")
