@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/puppetlabs/scarp/testutils"
+	"github.com/hlindberg/mezquit/testutils"
 )
 
 func Test_ConnectRequest_makeMessage_and_WriteTo(t *testing.T) {
