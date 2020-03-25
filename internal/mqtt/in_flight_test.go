@@ -3,7 +3,7 @@ package mqtt
 import (
 	"testing"
 
-	"github.com/puppetlabs/scarp/testutils"
+	"github.com/hlindberg/mezquit/testutils"
 )
 
 func Test_CanCreateNewInFlight_AndGetPacketID_1(t *testing.T) {

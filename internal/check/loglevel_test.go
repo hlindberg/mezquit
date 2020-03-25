@@ -3,7 +3,7 @@ package check
 import (
 	"testing"
 
-	"github.com/hlindberg/tiler/testutils"
+	"github.com/hlindberg/mezquit/testutils"
 )
 
 func Test_Loglevel_valid(t *testing.T) {

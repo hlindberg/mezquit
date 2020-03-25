@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/puppetlabs/scarp/testutils"
+	"github.com/hlindberg/mezquit/testutils"
 )
 
 // immediate and with timeout (to process those waiting)
