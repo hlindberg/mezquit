@@ -1,14 +1,28 @@
 package mqtt
 
 import (
-	"bytes"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 
 	"github.com/lithammer/shortuuid"
+)
+
+const (
+	// INITIAL Session state is before session has been used/connected
+	INITIAL = iota
+
+	// CONNECTED Session state is when Session is connected (or thinks it is - it does not know about the state of the actual network connection)
+	CONNECTED
+
+	// DISCONNECTING Session state is when Session is in the process of disconnecting (waiting for queues to drain)
+	DISCONNECTING
+
+	// DISCONNECTED Session state is when Session has been DISCONNECTED (and it is possible to reconnect)
+	DISCONNECTED
 )
 
 // Session describes a client session that may span several connects to a MQTT Broker
@@ -17,12 +31,14 @@ import (
 // the responsability of the caller (open/dial, close, reconnect, etc.)
 //
 type Session struct {
-	freeNumbers     chan int
-	returnedNumbers chan int
-	options         SessionOptions
-	inFlight        *inFlight
-	stopAfter       chan int
-	stopped         chan bool
+	options   SessionOptions
+	inFlight  *inFlight
+	stopAfter chan int
+	stopped   chan bool
+	toBroker  chan MessageWriter
+	drained   chan bool
+	state     int
+	mutex     *sync.RWMutex // mutex for session state changes
 }
 
 func (s *Session) initInFlight(doClean bool) {
@@ -42,13 +58,28 @@ func (s *Session) initInFlight(doClean bool) {
 func (s *Session) Connect(options ...ConnectOption) error {
 	s.assertReaderWriter()
 
+	// Since go does not have mutex transitions read->write and vice versa a write lock is needed here
+	// since there can otherwise be reace conditions in the gap between releasing a read lock and aquiring a write lock.
+	// meaning state could have changed. Instead this always aquires a write lock.
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	// Error if not in INITIAL, or DISCONNECTED state
+	if !(s.state == INITIAL || s.state == DISCONNECTED) {
+		// i.e. cannot connect when disconnecting (waiting for drains), and also not when already connected
+		return fmt.Errorf("Cannot Connect when session is disconnecting or already connected")
+	}
+
 	// Create a request (override the client name by appending it - thus overwriting what user gave)
 	options = append(options, ClientName(s.options.ClientName))
 	connectionRequest := NewConnectRequest(options...)
 	s.initInFlight(connectionRequest.IsCleanSession())
 
 	// Send CONNECT
-	_, err := connectionRequest.WriteTo(s.options.Writer)
+	log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
+
+	msg := connectionRequest.makeMessage()
+	_, err := msg.WriteTo(s.options.Writer)
 	// TODO: Log the write in debug
 	if err != nil {
 		// TODO: Log this
@@ -81,10 +112,9 @@ func (s *Session) Connect(options ...ConnectOption) error {
 		return fmt.Errorf("Expected CONNACK length of 2 but got %d", response[1])
 	}
 
+	spFlagSet := false
 	if response[2] == 1 {
-		// TODO: Change to log this at debug level
-		// TODO: What is the practical meaning of this? Does a client need to know?
-		fmt.Printf("Got SP CONNACK flag set in response\n")
+		spFlagSet = true // TODO: What does this mean to a client?
 	}
 
 	if response[3] != ConnectionAccepted {
@@ -92,9 +122,19 @@ func (s *Session) Connect(options ...ConnectOption) error {
 		return fmt.Errorf("Did not get ConnectionAccepted return status back - got %d", response[3])
 	}
 
+	log.Debugf("Broker -> CONNACK(sp=%v) received ok", spFlagSet)
+
+	s.state = CONNECTED
+
 	// Start a lister goroutine that listens on the connection and a channel where a timeout can be received
 	// signalling that it should stop after that timeout (or 0).
-	s.HandleMessages()
+	log.Debugf("Session: starting handleMessages()")
+	s.handleMessages()
+
+	// Start a send to broker goroutine that listens on the `toBroker` queue and writes them in order
+	//
+	log.Debugf("Session: Starting startSendToBroker()")
+	s.startSendToBroker()
 
 	return nil
 }
@@ -105,54 +145,89 @@ func (s *Session) Connect(options ...ConnectOption) error {
 // or the timeout occurs. If `drain` is set to `false`, processing of incoming ACKS will stop as soon as possible and
 // the DISCONNECT is then sent.
 //
-func (s *Session) Disconnect(drain bool, timeout int) error {
+// TODO: Block posts and subscriptions after Disconnect is called
+//
+func (s *Session) Disconnect(timeout int) error {
+	log.Debugf("Disconnect()")
 
-	// TODO: Sending should be done on a queue to enable sending a DISCONNECT without any
-	// concurrency issues.
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if s.state == INITIAL {
+		return nil // wasn't connected in the first place - no work to do.
+	}
+	if s.state != CONNECTED {
+		return fmt.Errorf("Session can only be disconnected when it is in INITIAL, or CONNECTED state")
+	}
 
-	// TODO: send to s.stopAfter to stop the message handler
+	log.Debugf("Session: Stopping messageHandler with Timeout %d", timeout)
+	// send stop to the incoming message handler
 	s.stopAfter <- timeout
 
-	// Wait for handler to stop
+	// Wait for message handler to stop
 	_ = <-s.stopped
 
-	var data bytes.Buffer
-	data.WriteByte(byte(DisconnectType<<4 | Reserved))
-	data.WriteByte(0)
+	log.Debugf("Session: messageHandler() stop signal received")
 
-	_, err := s.options.Writer.Write(data.Bytes())
-	return err
+	log.Debugf("Broker <- DISCONNECT")
+
+	// Enqueue the disconnect to be sent to the broker
+	s.toBroker <- NewDisconnectMessage()
+
+	// Stop accepting messages to the s.toBroker channel - the queue will be drained
+	close(s.toBroker)
+
+	// Wait for outgoing messages to drain (including the disconnect)
+	// TODO: maybe enqueue an error in case the drain fails...
+	_ = <-s.drained
+
+	log.Debugf("Session: Queue to broker drained")
+
+	s.state = DISCONNECTED
+	return nil // TODO: maybe return an error produced by the drain? Bigger question is handling errors while sending?
+}
+
+// startSendToBroker starts a goroutine that reads s.toBroker and sends whatever is posted there
+// to the broker. This continues until s.toBroker channel is closed.
+//
+func (s *Session) startSendToBroker() {
+	s.toBroker = make(chan MessageWriter, 100)
+	go func() {
+		for message := range s.toBroker {
+			message.WriteTo(s.options.Writer)
+		}
+		s.drained <- true // signal all written
+	}()
 }
 
 // HandleMessages starts go routines that listens for incoming ACK and performs the required housekeeping
-// of messages in flight.
+// of messages in-flight.
 // Note that a client should call `Disconnect` for an orderly disconnect - that will also optionally do a drain with
 // a timeout.
 //
-func (s *Session) HandleMessages() {
+func (s *Session) handleMessages() {
 
 	go func() {
 		timeout := make(chan bool)
-		headers := make(chan byte)
-		conerror := make(chan error)
+		messages := make(chan *GenericMessage, 100)
 
 		go func() {
 			fixedHeader := make([]byte, 1)
 			for {
-				n, err := s.options.Reader.Read(fixedHeader)
+				n, err := io.ReadFull(s.options.Reader, fixedHeader)
 				if err != nil {
-					conerror <- err
-					if err == io.EOF {
+					if err == io.EOF || n == 0 {
+						log.Debugf("Read Loop: EOF on broker connection - stopped reading")
 						break // stop loop, connection is closed
 					}
 				}
-				if n != 1 {
-					conerror <- fmt.Errorf("Read of one byte did not read a byte")
-					// TODO: What to do here? Stop the loop?
+				msg, err := s.readMessage(fixedHeader[0])
+				if err != nil {
+					log.Debugf("readMessage() returned error %s", err)
+					break // stop loop - don't know what to do...
 				}
-				// TODO: Headers should be buffered to handle multiple in flight
-				headers <- fixedHeader[0]
+				messages <- msg
 			}
+
 		}()
 
 		for {
@@ -171,40 +246,47 @@ func (s *Session) HandleMessages() {
 				s.stopped <- true
 				break
 
-			case header := <-headers:
-				// read a header byte call specific handlers
-				msgType := header >> 4
+			case msg := <-messages:
+				// fan out to process specific handlers
+				log.Debugf("Message Loop: msg type %x, length %d, bytes: %v", msg.fixedHeader, len(msg.body), msg.body)
+
+				msgType := int(msg.fixedHeader >> 4)
 				switch msgType {
 				case PublishAckType:
-					s.processPublishAck(msgType)
+					s.processPublishAck(msg)
 				default:
 					// TODO: for now panic as this logic will not correctly read the message to clear for next
-					panic(fmt.Sprintf("Unhandles message type %d - not yet implemented", msgType))
+					panic(fmt.Sprintf("Message Processing Loop: Unhandled message type %d - not yet implemented", msgType))
 				}
 			}
 		}
 	}()
 }
 
-func (s *Session) processPublishAck(fixedHeaderByte byte) {
-	// Must read a byte having value 2 (additional bytes PackageID)
-	// Must free this waiting packet
-	// Error if receiving an ACK for non waiting message ? Already ACKed or never sent ?
-
-	threeBytes := make([]byte, 3)
-	n, err := s.options.Reader.Read(threeBytes)
-
-	// How to deal with an error here?
+func (s *Session) readMessage(fixedHeaderByte byte) (*GenericMessage, error) {
+	remainingLength, err := DecodeVariableInt(s.options.Reader)
 	if err != nil {
-		panic(fmt.Sprintf("Error while reading a PUBACK: %s", err))
+		return nil, err
 	}
-	if n != 3 {
-		panic(fmt.Sprintf("Expected to read 3 bytes when reading PUBACK - read %d", n))
+	msg := GenericMessage{fixedHeader: fixedHeaderByte, body: make([]byte, remainingLength)}
+	n, err := io.ReadFull(s.options.Reader, msg.body)
+	if n != remainingLength {
+		err = fmt.Errorf("Expected to read %d bytes remaining length of message but got %d", remainingLength, n)
 	}
-	if threeBytes[0] != 2 {
-		panic(fmt.Sprintf("Expected to read a first byte of value 2 (length) when reading PUBACK - read %d", threeBytes[0]))
+	return &msg, err
+}
+
+func (s *Session) processPublishAck(msg *GenericMessage) {
+	if msg.fixedHeader>>4 != PublishAckType {
+		panic(fmt.Sprintf("processPublishAck() got generic message of wrong type: %d", msg.fixedHeader>>4))
 	}
-	packetID := int(threeBytes[1])<<8 | int(threeBytes[2])
+	body := msg.body
+	if len(body) != 2 {
+		panic(fmt.Sprintf("PUBACK expects 2 bytes packet ID as the body - got %d", len(body)))
+	}
+	packetID := int(body[0])<<8 | int(body[1])
+
+	log.Debugf("PUBACK(%d) Received", packetID)
 
 	// Packet is no longer waiting since this is QoS 1
 	s.inFlight.releaseWaiting(packetID)
@@ -213,12 +295,27 @@ func (s *Session) processPublishAck(fixedHeaderByte byte) {
 	s.inFlight.unsetBit(packetID)
 }
 
-// Publish publishes to a MQTT broker and if QoS is > 0 handles the ACK messages that follows
-func (s *Session) Publish(options ...PublishOption) {
+// Publish publishes to the connected MQTT broker (Session handles ACKs)
+//
+func (s *Session) Publish(options ...PublishOption) error {
 	s.assertReaderWriter()
-
-	publishRequest := NewPublishRequest(options...)
-	publishRequest.WriteTo(s.options.Writer)
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	if s.state != CONNECTED {
+		return fmt.Errorf("Publish requires session to be in CONNECTED state")
+	}
+	var msg MessageWriter
+	// Set PacketID if required
+	pr := NewPublishRequest(options...)
+	if pr.options.QoS > 0 && pr.options.PacketID == 0 {
+		pr.options.PacketID = s.inFlight.nextPacketID()
+		msg = pr.makeMessage()
+		s.inFlight.registerWaiting(pr.options.PacketID, msg)
+	} else {
+		msg = pr.makeMessage()
+	}
+	s.toBroker <- msg
+	return nil
 }
 
 func (s *Session) assertReaderWriter() {
@@ -254,7 +351,14 @@ func NewSession(options ...SessionOption) *Session {
 		}
 	}
 
-	return &Session{options: opts, stopAfter: make(chan int), stopped: make(chan bool)}
+	return &Session{
+		options:   opts,
+		stopAfter: make(chan int),
+		stopped:   make(chan bool),
+		drained:   make(chan bool),
+		mutex:     &sync.RWMutex{},
+		state:     INITIAL,
+	}
 }
 
 // ReEstablish enables modifying the Input/Output options of an existing Session (i.e. for a new network connection).

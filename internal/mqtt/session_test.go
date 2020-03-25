@@ -14,8 +14,10 @@ import (
 // Reconnect with QoS 2
 // Resends
 // Wills when not disconnecting with Disconnect ? (difficult, need a reader testing broker)
+// Cannot Connect when Connected
+// Cannot Disconnect when not Connected (although INITIAL is fine - since it never was connected - does nothing)
 //
-func Test_Session_Connect_and_Disconnect_QoS_1_immediate(t *testing.T) {
+func Test_Session_Connect_and_Disconnect_QoS_0_immediate(t *testing.T) {
 	connectResponse := testhelperConnectionAccepted()
 	reader := bytes.NewReader(connectResponse)
 	var writer bytes.Buffer
@@ -25,7 +27,7 @@ func Test_Session_Connect_and_Disconnect_QoS_1_immediate(t *testing.T) {
 	testutils.CheckNotError(err, t)
 
 	// Immediate disconnect
-	err = session.Disconnect(false, 0)
+	err = session.Disconnect(0)
 	testutils.CheckNotError(err, t)
 
 	// Check that Connect and Disconnect was emitted

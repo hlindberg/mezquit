@@ -2,6 +2,8 @@ package mqtt
 
 import (
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -80,11 +82,10 @@ func cappedIncrement(x int) int {
 }
 
 type waitingPacket struct {
-	data       *[]byte
-	packetID   int
-	waitingFor int
-	next       *waitingPacket
-	prev       *waitingPacket
+	msg      MessageWriter
+	packetID int
+	next     *waitingPacket
+	prev     *waitingPacket
 }
 
 func (wp *waitingPacket) nextPacket() *waitingPacket {
@@ -96,12 +97,12 @@ func (wp *waitingPacket) prevPacket() *waitingPacket {
 }
 
 // registerWaiting registers a package with a given packetID as waiting for an ACK of some kind
-func (f *inFlight) registerWaiting(packetID int, waitingFor int, packet *[]byte) {
+func (f *inFlight) registerWaiting(packetID int, msg MessageWriter) {
 	// TODO: Could use separate mutex
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	f.setBit(packetID) // Just in case, and this also allows test to just register packets will self asserted unique values
-	theElement := f.waitingList.PushBack(&waitingPacket{data: packet, packetID: packetID, waitingFor: waitingFor})
+	theElement := f.waitingList.PushBack(&waitingPacket{msg: msg, packetID: packetID})
 	f.waitingIdx[packetID] = theElement
 }
 
@@ -109,12 +110,17 @@ func (f *inFlight) registerWaiting(packetID int, waitingFor int, packet *[]byte)
 // as there may be a new packet (QoS==2) of different kind for the same package ID
 //
 func (f *inFlight) releaseWaiting(packetID int) {
+	log.Debugf("releaseWaitingPacket(%d)", packetID)
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	if !f.getBit(packetID) {
 		panic("Cannot release a packet that is not registered as waiting")
 	}
 	theElement := f.waitingIdx[packetID]
+	if theElement == nil {
+		log.Debugf("no registered packed for packed ID: %d", packetID)
+	}
+
 	f.waitingList.Remove(theElement)
 }
 
@@ -123,11 +129,11 @@ func (f *inFlight) releaseWaiting(packetID int) {
 // A lock is kept until the entire iteration is done (or there is a panic) - thus, it is not allowed
 // to claim any new IDs or register any new packets during this iteration.
 //
-func (f *inFlight) eachWaitingPacket(lambda func(packetID int, waitingFor int, data *[]byte)) {
+func (f *inFlight) eachWaitingPacket(lambda func(packetID int, msg MessageWriter)) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	for e := f.waitingList.Front(); e != nil; e = e.nextPacket() {
-		lambda(e.packetID, e.waitingFor, e.data)
+		lambda(e.packetID, e.msg)
 	}
 }
 

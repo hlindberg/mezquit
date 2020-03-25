@@ -155,17 +155,17 @@ func Test_waitingPacketList_does_not_accept_PushBack_of_nil(t *testing.T) {
 
 func Test_inFlight_eachWaitingPacket_yields_each_waiting_package(t *testing.T) {
 	inF := newInFlight()
-	data1 := []byte{7}
-	data2 := []byte{8}
-	data3 := []byte{9}
-	inF.registerWaiting(1, 4, &data1)
-	inF.registerWaiting(2, 5, &data2)
-	inF.registerWaiting(3, 6, &data3)
+	data1 := GenericMessage{fixedHeader: 0, body: []byte{7}}
+	data2 := GenericMessage{fixedHeader: 0, body: []byte{8}}
+	data3 := GenericMessage{fixedHeader: 0, body: []byte{9}}
+	inF.registerWaiting(1, &data1)
+	inF.registerWaiting(2, &data2)
+	inF.registerWaiting(3, &data3)
 	val := 0
-	inF.eachWaitingPacket(func(id int, wf int, data *[]byte) {
-		val += id + wf + int((*data)[0])
+	inF.eachWaitingPacket(func(id int, msg MessageWriter) {
+		val += id
 	})
-	testutils.CheckEqual(1+2+3+4+5+6+7+8+9, val, t)
+	testutils.CheckEqual(1+2+3, val, t)
 }
 
 func Test_inFlight_releaseWaitingPacket_drops_it_from_list_without_resetting_bit(t *testing.T) {
@@ -173,20 +173,20 @@ func Test_inFlight_releaseWaitingPacket_drops_it_from_list_without_resetting_bit
 	inF.setBit(1)
 	inF.setBit(2)
 	inF.setBit(3)
-	data1 := []byte{7}
-	data2 := []byte{8}
-	data3 := []byte{9}
-	inF.registerWaiting(1, 4, &data1)
-	inF.registerWaiting(2, 5, &data2)
-	inF.registerWaiting(3, 6, &data3)
+	data1 := GenericMessage{fixedHeader: 0, body: []byte{7}}
+	data2 := GenericMessage{fixedHeader: 0, body: []byte{8}}
+	data3 := GenericMessage{fixedHeader: 0, body: []byte{9}}
+	inF.registerWaiting(1, &data1)
+	inF.registerWaiting(2, &data2)
+	inF.registerWaiting(3, &data3)
 
 	inF.releaseWaiting(3)
 
 	val := 0
-	inF.eachWaitingPacket(func(id int, wf int, data *[]byte) {
-		val += id + wf + int((*data)[0])
+	inF.eachWaitingPacket(func(id int, data MessageWriter) {
+		val += id
 	})
-	testutils.CheckEqual(1+2+4+5+7+8, val, t)
+	testutils.CheckEqual(1+2, val, t)
 	testutils.CheckTrue(inF.getBit(3), t)
 }
 

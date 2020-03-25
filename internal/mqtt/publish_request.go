@@ -3,7 +3,6 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 )
 
@@ -60,18 +59,9 @@ func (r *PublishRequest) fixedHeaderBits() byte {
 	return result
 }
 
-// WriteTo writes the PublishRequest to the given io.Writer
-//
-func (r *PublishRequest) WriteTo(writer io.Writer) (n int64, err error) {
-	var data bytes.Buffer // 64 bytes
-
-	// FIXED HEADER
-	data.WriteByte(r.fixedHeaderBits())
-
-	// REMAINING LENGTH
-	rl := r.remainingLength()
-	EncodeVariableIntTo(rl, &data)
-	data.Grow(rl) // ensure all to be written fits using only one buffer allocation
+func (r *PublishRequest) makeMessage() *GenericMessage {
+	var data bytes.Buffer          // 64 bytes
+	data.Grow(r.remainingLength()) // ensure all to be written fits using only one buffer allocation
 
 	// VARIABLE HEADER
 	EncodeStringTo(r.options.Topic, &data)
@@ -83,10 +73,7 @@ func (r *PublishRequest) WriteTo(writer io.Writer) (n int64, err error) {
 	// PAYLOAD
 	// Message is without preceeding lenght (calculated from the remainder of the "remainingLength")
 	data.Write(r.options.Message)
-
-	// WRITE
-	written, err := writer.Write(data.Bytes())
-	return int64(written), err
+	return &GenericMessage{fixedHeader: r.fixedHeaderBits(), body: data.Bytes()}
 }
 
 // PublishOptions contains options for a ConnectRequest

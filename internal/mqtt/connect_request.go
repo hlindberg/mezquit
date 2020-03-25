@@ -3,7 +3,6 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
-	"io"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -81,19 +80,14 @@ func (r *ConnectRequest) connectBits() byte {
 
 // WriteTo writes the ConnectRequest to the given io.Writer
 //
-func (r *ConnectRequest) WriteTo(writer io.Writer) (n int64, err error) {
+func (r *ConnectRequest) makeMessage() *GenericMessage {
 	var data bytes.Buffer // 64 bytes in the first Grow which should be enough unless client ID is very long (not worth optimizing)
 
 	connectBits := r.connectBits()
 	keepAlive := r.options.KeepAliveSeconds
 
 	// FIXED CONNECT HEADER
-	data.WriteByte(ConnectType<<4 | Reserved)
-
-	// REMAINING LENGTH - VARIABLE HEADER LENGTH (always 10 for connect) + PAYLOAD LENGTH
-	v := 10 + r.remainingLength()
-	log.Printf("Connect variable lenght is %d\n", v)
-	EncodeVariableIntTo(v, &data)
+	fixedHeader := byte(ConnectType<<4 | Reserved)
 
 	// Connect variable part            Byte   Description
 	//                                  ------ ----------------------------------------------
@@ -126,8 +120,7 @@ func (r *ConnectRequest) WriteTo(writer io.Writer) (n int64, err error) {
 		EncodeBytesTo(*r.options.Password, &data)
 	}
 
-	written, err := writer.Write(data.Bytes())
-	return int64(written), err
+	return &GenericMessage{fixedHeader: fixedHeader, body: data.Bytes()}
 }
 
 // NewConnectRequest constructs a new ConnectRequest based on a default set of options

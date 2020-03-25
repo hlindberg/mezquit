@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/csv"
 	"fmt"
 	"net"
+	"os"
 
 	"github.com/hlindberg/mezquit/internal/mqtt"
 	"github.com/spf13/cobra"
@@ -29,19 +31,36 @@ var publishCmd = &cobra.Command{
 		if err != nil {
 			panic(err)
 		}
-
-		session.Publish(mqtt.Message([]byte(Message)),
-			mqtt.Topic(Topic),
-			mqtt.QoS(0),
-			mqtt.Retain(false),
-		)
-		session.Disconnect(true, 0)
+		if FileName == "" {
+			session.Publish(mqtt.Message([]byte(Message)),
+				mqtt.Topic(Topic),
+				mqtt.QoS(QoS),
+				mqtt.Retain(false),
+			)
+		} else {
+			f, err := os.Open(FileName)
+			if err != nil {
+				panic(fmt.Sprintf("Cannot open file %s", FileName))
+			}
+			all, err := csv.NewReader(f).ReadAll()
+			for _, r := range all {
+				session.Publish(mqtt.Message([]byte(r[1])),
+					mqtt.Topic(r[0]),
+					mqtt.QoS(QoS),
+					mqtt.Retain(false),
+				)
+			}
+		}
+		session.Disconnect(10)
 		// Done
 		conn.Close()
 	},
 
 	Args: func(cmd *cobra.Command, args []string) error {
 		// Check any arguments
+		if QoS < 0 || QoS > 2 {
+			return fmt.Errorf("qos must be between 0 and 2, got %d", QoS)
+		}
 		return nil
 	},
 }
@@ -55,11 +74,19 @@ var Topic string
 // Message is the MQTT message text to publish
 var Message string
 
+// QoS is the MQQT quality of service to publish at (and also to connect with)
+var QoS int
+
+// FileName the name of a file to read instead of using --topic and --message
+var FileName string
+
 func init() {
 	RootCmd.AddCommand(publishCmd)
 	flags := publishCmd.PersistentFlags()
 
-	flags.StringVarP(&MQQTBroker, "broker", "b", "mqtt.eclipse.org", "the MQTT Broker host to connect to (default 'mgtt.eclipse.org')")
+	flags.StringVarP(&MQQTBroker, "broker", "b", "localhost", "the MQTT Broker host to connect to (default 'localhost')")
 	flags.StringVarP(&Topic, "topic", "t", "test", "the MQTT topic to send message to (default 'test')")
 	flags.StringVarP(&Message, "message", "m", "", "the message to send")
+	flags.IntVarP(&QoS, "qos", "q", 0, "Quality of service 0-2 (default 0)")
+	flags.StringVarP(&FileName, "file", "f", "", "File with CSV <topic, message> lines to publish")
 }

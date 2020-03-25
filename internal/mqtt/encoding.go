@@ -40,7 +40,7 @@ func DecodeVariableInt(reader io.Reader) (int, error) {
 		multiplier *= 128
 
 		if multiplier > 128*128*128 {
-			return 0, fmt.Errorf("Malformed Remaining Length")
+			return 0, fmt.Errorf("Malformed variable length")
 		}
 		if (encodedByte & 128) == 0 {
 			break
@@ -66,8 +66,6 @@ func EncodeVariableIntTo(value int, to *bytes.Buffer) int {
 	}
 	return len(bytes)
 }
-
-// TODO: DecodeVariableInt
 
 // EncodeStringTo encodes a given string into the given buffer - 16 bit length + the content
 func EncodeStringTo(value string, to *bytes.Buffer) {
