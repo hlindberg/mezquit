@@ -39,7 +39,7 @@ var publishCmd = &cobra.Command{
 			session.Publish(mqtt.Message([]byte(Message)),
 				mqtt.Topic(Topic),
 				mqtt.QoS(QoS),
-				mqtt.Retain(false),
+				mqtt.Retain(Retain),
 			)
 		} else {
 			f, err := os.Open(FileName)
@@ -87,6 +87,9 @@ var QoS int
 // FileName the name of a file to read instead of using --topic and --message
 var FileName string
 
+// Retain indicates if the published message should be retained
+var Retain bool
+
 func init() {
 	RootCmd.AddCommand(publishCmd)
 	flags := publishCmd.PersistentFlags()
@@ -97,4 +100,5 @@ func init() {
 	flags.StringVarP(&Message, "message", "m", "", "the message to send")
 	flags.IntVarP(&QoS, "qos", "q", 0, "Quality of service 0-2 (default 0)")
 	flags.StringVarP(&FileName, "file", "f", "", "File with CSV <topic, message> lines to publish")
+	flags.BoolVarP(&Retain, "retain", "r", false, "If message should be retained")
 }
