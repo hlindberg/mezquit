@@ -31,14 +31,15 @@ const (
 // the responsability of the caller (open/dial, close, reconnect, etc.)
 //
 type Session struct {
-	options   SessionOptions
-	inFlight  *inFlight
-	stopAfter chan int
-	stopped   chan bool
-	toBroker  chan MessageWriter
-	drained   chan bool
-	state     int
-	mutex     *sync.RWMutex // mutex for session state changes
+	options       SessionOptions
+	inFlight      *inFlight
+	stopAfter     chan int
+	stopped       chan bool
+	toBroker      chan MessageWriter
+	drained       chan bool
+	state         int
+	mutex         *sync.RWMutex // mutex for session state changes
+	XIgnorePubAck bool          // eXceptional behavior - ignore PUBACKs and let the set of inFligh messages grow
 }
 
 func (s *Session) initInFlight(doClean bool) {
@@ -52,7 +53,7 @@ func (s *Session) initInFlight(doClean bool) {
 // The ClientName ConnectOption should not be included in the ConnectOptions as it is defined by the Session.
 // If given as an option here it will be silently overwritten by the name given for the session.
 //
-// If calling this to continue the session (after an optional ReEstablis()), the CleanSession(false) option
+// If calling this to continue the session (after an optional ReEstablish()), the CleanSession(false) option
 // should be used if QoS > 0 and there is a desire to continue with the same packets "in flight".
 //
 func (s *Session) Connect(options ...ConnectOption) error {
@@ -74,6 +75,7 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	options = append(options, ClientName(s.options.ClientName))
 	connectionRequest := NewConnectRequest(options...)
 	s.initInFlight(connectionRequest.IsCleanSession())
+	s.XIgnorePubAck = connectionRequest.options.XIgnorePubAck
 
 	// Send CONNECT
 	log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
@@ -136,6 +138,13 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	log.Debugf("Session: Starting startSendToBroker()")
 	s.startSendToBroker()
 
+	// If this is a reconnect (non clean session, resend messages)
+	if !connectionRequest.IsCleanSession() {
+		s.inFlight.eachWaitingPacket(func(packetID int, msg MessageWriter) {
+			log.Debugf("Resending message with packetID: %d", packetID)
+			msg.WriteDupTo(s.options.Writer)
+		})
+	}
 	return nil
 }
 
@@ -321,6 +330,11 @@ func (s *Session) processPublishAck(msg *GenericMessage) {
 	packetID := int(body[0])<<8 | int(body[1])
 
 	log.Debugf("PUBACK(%d) Received", packetID)
+	if s.XIgnorePubAck {
+		// Exceptional test behavior
+		log.Debugf("PUBACK(%d) Ignored", packetID)
+		return
+	}
 
 	// Packet is no longer waiting since this is QoS 1
 	s.inFlight.releaseWaiting(packetID)

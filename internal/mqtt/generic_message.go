@@ -30,7 +30,7 @@ func (m *GenericMessage) WriteTo(writer io.Writer) (int64, error) {
 // The original message is unchanged
 func (m *GenericMessage) WriteDupTo(writer io.Writer) (int64, error) {
 	m2 := m
-	if m.fixedHeader<<4 == PublishType {
+	if m.fixedHeader>>4 == PublishType {
 		m2 = &GenericMessage{fixedHeader: m.fixedHeader | DupBit, body: m.body}
 	}
 	return m2.WriteTo(writer)

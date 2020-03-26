@@ -18,57 +18,12 @@ var publishCmd = &cobra.Command{
 
 	`,
 	Run: func(cmd *cobra.Command, args []string) {
-
-		// This MQTT client uses a hard coded broker and unencrypted TCP port
-		// It gives the resulting conn as both Input and Output to a MQTT Session
-		//
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", MQTTBroker, mqtt.UnencryptedPortTCP))
-		if err != nil {
-			panic(err)
-		}
-		if MQTTClientName == "" {
-			MQTTClientName = mqtt.RandomClientID()
-			log.Infof("Using generated client ID %s", MQTTClientName)
-		}
-		session := mqtt.NewSession(mqtt.ClientID(MQTTClientName), mqtt.InputOutput(conn))
-		err = session.Connect(
-			mqtt.WillTopic(WillTopic),
-			mqtt.WillMessage([]byte(WillMessage)),
-			mqtt.WillQoS(WillQoS),
-			mqtt.WillRetain(WillRetain),
-			mqtt.KeepAliveSeconds(KeepAliveSeconds),
-		)
-
-		if err != nil {
-			panic(err)
-		}
-		if FileName == "" {
-			session.Publish(mqtt.Message([]byte(Message)),
-				mqtt.Topic(Topic),
-				mqtt.QoS(QoS),
-				mqtt.Retain(Retain),
-			)
+		p := &publisher{}
+		if TestQoS1Resend {
+			p.qos1ResendPublish()
 		} else {
-			f, err := os.Open(FileName)
-			if err != nil {
-				panic(fmt.Sprintf("Cannot open file %s", FileName))
-			}
-			all, err := csv.NewReader(f).ReadAll()
-			for _, r := range all {
-				session.Publish(mqtt.Message([]byte(r[1])),
-					mqtt.Topic(r[0]),
-					mqtt.QoS(QoS),
-					mqtt.Retain(false),
-				)
-			}
+			p.standardPublish()
 		}
-		if TestNoDisconnect {
-			session.DisconnectWithoutMessage(1)
-		} else {
-			session.Disconnect(1)
-		}
-		// Done
-		conn.Close()
 	},
 
 	Args: func(cmd *cobra.Command, args []string) error {
@@ -79,9 +34,135 @@ var publishCmd = &cobra.Command{
 		if KeepAliveSeconds < 0 {
 			return fmt.Errorf("--keep_alive cannot be negative")
 		}
-
+		if TestQoS1Resend {
+			if QoS != 1 {
+				log.Debugf("QoS set to 1 since --test_qos1_resend was requested")
+				QoS = 1
+			}
+		}
 		return nil
 	},
+}
+
+type publisher struct {
+}
+
+func (p *publisher) dial() net.Conn {
+	// This MQTT client uses a hard coded broker and unencrypted TCP port
+	// It gives the resulting conn as both Input and Output to a MQTT Session
+	//
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", MQTTBroker, mqtt.UnencryptedPortTCP))
+	if err != nil {
+		panic(err)
+	}
+	return conn
+}
+
+func (p *publisher) clientName() string {
+	if MQTTClientName == "" {
+		MQTTClientName = mqtt.RandomClientID()
+		log.Infof("Using generated client ID %s", MQTTClientName)
+	}
+	return MQTTClientName
+}
+
+func (p *publisher) session(clientName string, conn net.Conn) *mqtt.Session {
+	return mqtt.NewSession(mqtt.ClientID(clientName), mqtt.InputOutput(conn))
+}
+
+func (p *publisher) connect(session *mqtt.Session, ignorePubAck bool, cleanSession bool) {
+	err := session.Connect(
+		mqtt.WillTopic(WillTopic),
+		mqtt.WillMessage([]byte(WillMessage)),
+		mqtt.WillQoS(WillQoS),
+		mqtt.WillRetain(WillRetain),
+		mqtt.KeepAliveSeconds(KeepAliveSeconds),
+		mqtt.XIgnorePubAck(ignorePubAck),
+		mqtt.CleanSession(cleanSession),
+	)
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (p *publisher) publishMessage(session *mqtt.Session) {
+	session.Publish(mqtt.Message([]byte(Message)),
+		mqtt.Topic(Topic),
+		mqtt.QoS(QoS),
+		mqtt.Retain(Retain),
+	)
+}
+
+func (p *publisher) publishFromFile(session *mqtt.Session) {
+	f, err := os.Open(FileName)
+	if err != nil {
+		panic(fmt.Sprintf("Cannot open file %s", FileName))
+	}
+	all, err := csv.NewReader(f).ReadAll()
+	for _, r := range all {
+		session.Publish(mqtt.Message([]byte(r[1])),
+			mqtt.Topic(r[0]),
+			mqtt.QoS(QoS),
+			mqtt.Retain(false),
+		)
+	}
+}
+
+func (p *publisher) publishGivenMessage(session *mqtt.Session) {
+	if FileName == "" {
+		p.publishMessage(session)
+	} else {
+		p.publishFromFile(session)
+	}
+}
+
+func (p *publisher) standardPublish() {
+	conn := p.dial()
+	clientName := p.clientName()
+	session := p.session(clientName, conn)
+	p.connect(session, false, true)
+	p.publishGivenMessage(session)
+
+	if TestNoDisconnect {
+		session.DisconnectWithoutMessage(1)
+	} else {
+		session.Disconnect(1)
+	}
+	// Done
+	conn.Close()
+}
+
+func (p *publisher) qos1ResendPublish() {
+	// First pass where PUBACK is ignored
+	conn := p.dial()
+	clientName := p.clientName()
+	session := p.session(clientName, conn)
+	p.connect(session, true, true) // ignore PUBACK, clean session
+	p.publishGivenMessage(session)
+
+	if TestNoDisconnect {
+		session.DisconnectWithoutMessage(1)
+	} else {
+		session.Disconnect(1)
+	}
+	// Done
+	conn.Close()
+
+	// Second Pass
+	conn = p.dial()
+	// Set new input/output to second connect
+	session.ReEstablish(mqtt.InputOutput(conn))
+	p.connect(session, false, false) // process PUBACK, not clean session
+
+	if TestNoDisconnect {
+		session.DisconnectWithoutMessage(1)
+	} else {
+		session.Disconnect(1)
+	}
+	// Done
+	conn.Close()
+
 }
 
 // MQTTBroker is the MQTT host:port to dial
@@ -123,6 +204,9 @@ var WillRetain bool
 // TestNoDisconnect if true no DISCONNECT is sent thereby allowing WILL features to be tested
 var TestNoDisconnect bool
 
+// TestQoS1Resend if true no DISCONNECT is sent thereby allowing WILL features to be tested
+var TestQoS1Resend bool
+
 func init() {
 	RootCmd.AddCommand(publishCmd)
 	flags := publishCmd.PersistentFlags()
@@ -155,5 +239,7 @@ func init() {
 	// Options for testing unclean operations
 	flags.BoolVarP(&TestNoDisconnect,
 		"test_no_disconnect", "", false, "do not send DISCONNECT to test WILL features")
+	flags.BoolVarP(&TestQoS1Resend,
+		"test_qos1_resend", "", false, "Performs: CONNECT, send message(s), ignore PUBACK(s), DISCONNECT, CONNECT with clean=false, resend, DISCONNECT")
 
 }

@@ -167,6 +167,7 @@ type ConnectOptions struct {
 	WillRetain       bool
 	UserName         string
 	Password         *[]byte
+	XIgnorePubAck    bool // eXceptional behavior - ignore PUBACKs and let the set of inFligh messages grow
 }
 
 // ConnectOption is an Options-modifying-function
@@ -273,4 +274,14 @@ func Password(value []byte) ConnectOption {
 		o.Password = &value
 		return nil
 	}
+}
+
+// XIgnorePubAck is an exceptional behavior flag that makes the session ignore all PUBACK
+//
+func XIgnorePubAck(flag bool) ConnectOption {
+	return func(o *ConnectOptions) error {
+		o.XIgnorePubAck = flag
+		return nil
+	}
+
 }
