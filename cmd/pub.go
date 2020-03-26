@@ -36,6 +36,7 @@ var publishCmd = &cobra.Command{
 			mqtt.WillMessage([]byte(WillMessage)),
 			mqtt.WillQoS(WillQoS),
 			mqtt.WillRetain(WillRetain),
+			mqtt.KeepAliveSeconds(KeepAliveSeconds),
 		)
 
 		if err != nil {
@@ -73,8 +74,12 @@ var publishCmd = &cobra.Command{
 	Args: func(cmd *cobra.Command, args []string) error {
 		// Check any arguments
 		if QoS < 0 || QoS > 2 {
-			return fmt.Errorf("qos must be between 0 and 2, got %d", QoS)
+			return fmt.Errorf("--qos must be between 0 and 2, got %d", QoS)
 		}
+		if KeepAliveSeconds < 0 {
+			return fmt.Errorf("--keep_alive cannot be negative")
+		}
+
 		return nil
 	},
 }
@@ -90,6 +95,9 @@ var Topic string
 
 // Message is the MQTT message text to publish
 var Message string
+
+// KeepAliveSeconds is the MQTT number of seconds to keep a connection alive
+var KeepAliveSeconds int
 
 // QoS is the MQQT quality of service to publish at (and also to connect with)
 var QoS int
@@ -125,6 +133,8 @@ func init() {
 		"client", "c", "", "the MQTT client name to use - default is a short UUID")
 	flags.StringVarP(&FileName,
 		"file", "f", "", "File with CSV <topic, message> lines to publish")
+	flags.IntVarP(&KeepAliveSeconds,
+		"keep_alive", "", 0, "sets the number of seconds to keep a connection alive")
 	flags.StringVarP(&Message,
 		"message", "m", "", "the message to send")
 	flags.StringVarP(&Topic,
