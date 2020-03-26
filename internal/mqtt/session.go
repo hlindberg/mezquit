@@ -139,6 +139,40 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	return nil
 }
 
+// DisconnectWithoutMessage performs flushing of messages just like Disconnect() but does not send a
+// DISCONNECT message to the broker.
+// This is used to test this scenario.
+//
+func (s *Session) DisconnectWithoutMessage(timeout int) error {
+	log.Debugf("DisconnectWithoutMessage()")
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if s.state == INITIAL {
+		return nil // wasn't connected in the first place - no work to do.
+	}
+	if s.state != CONNECTED {
+		return fmt.Errorf("Session can only be flushed when it is in INITIAL, or CONNECTED state")
+	}
+	log.Debugf("Session: Stopping messageHandler with Timeout %d", timeout)
+	// send stop to the incoming message handler
+	s.stopAfter <- timeout
+
+	// Wait for message handler to stop
+	_ = <-s.stopped
+
+	// Stop accepting messages to the s.toBroker channel - the queue will be drained
+	close(s.toBroker)
+
+	// Wait for outgoing messages to drain
+	// TODO: maybe enqueue an error in case the drain fails...
+	_ = <-s.drained
+
+	log.Debugf("Session: Queue to broker drained")
+
+	s.state = DISCONNECTED
+	return nil // TODO: maybe return an error produced by the drain? Bigger question is handling errors while sending?
+}
+
 // Disconnect disconnects the MQTT session from the broker in an orderly fashion by sending a DISCONNECT message
 // The `drain` parameter, if set to `true` will ensure that the Session will wait at least the given `timeout` in seconds
 // to allow messages in flight to be processed. The disconnect will be sent as soon as the in-flight message set is empty
