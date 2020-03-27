@@ -167,7 +167,8 @@ type ConnectOptions struct {
 	WillRetain       bool
 	UserName         string
 	Password         *[]byte
-	XIgnorePubAck    bool // eXceptional behavior - ignore PUBACKs and let the set of inFligh messages grow
+	XIgnorePubAck    bool // eXceptional behavior - ignore PUBACKs and PUBRECs and let the set of inFligh messages grow
+	XIgnorePubComp   bool // eXceptional behavior - ignore PUBCOMPs and let the set of inFligh messages grow
 }
 
 // ConnectOption is an Options-modifying-function

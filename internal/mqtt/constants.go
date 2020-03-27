@@ -16,8 +16,20 @@ const (
 	// PublishType control message type
 	PublishType = 3
 
-	// PublishAckType control message type
+	// PublishAckType control message type (PUBACK)
 	PublishAckType = 4
+
+	// PublishReceivedType control message type (PUBREC)
+	PublishReceivedType = 5
+
+	// PublishReleaseType control message type (PUBREL)
+	PublishReleaseType = 6
+
+	// PublishReleaseReserved bit 2 must be set in the reserved field
+	PublishReleaseReserved = 2
+
+	// PublishCompleteType control message type (PUBCOMP)
+	PublishCompleteType = 7
 
 	// DisconnectType control message type
 	DisconnectType = 14

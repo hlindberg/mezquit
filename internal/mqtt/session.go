@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sync"
@@ -31,15 +32,16 @@ const (
 // the responsability of the caller (open/dial, close, reconnect, etc.)
 //
 type Session struct {
-	options       SessionOptions
-	inFlight      *inFlight
-	stopAfter     chan int
-	stopped       chan bool
-	toBroker      chan MessageWriter
-	drained       chan bool
-	state         int
-	mutex         *sync.RWMutex // mutex for session state changes
-	XIgnorePubAck bool          // eXceptional behavior - ignore PUBACKs and let the set of inFligh messages grow
+	options        SessionOptions
+	inFlight       *inFlight
+	stopAfter      chan int
+	stopped        chan bool
+	toBroker       chan MessageWriter
+	drained        chan bool
+	state          int
+	mutex          *sync.RWMutex // mutex for session state changes
+	XIgnorePubAck  bool          // eXceptional behavior - ignore PUBACKs and PUBRECs and let the set of inFligh messages grow
+	XIgnorePubComp bool          // eXceptional behavior - ignore PUBCOMPs and let the set of inFligh messages grow
 }
 
 func (s *Session) initInFlight(doClean bool) {
@@ -76,6 +78,7 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	connectionRequest := NewConnectRequest(options...)
 	s.initInFlight(connectionRequest.IsCleanSession())
 	s.XIgnorePubAck = connectionRequest.options.XIgnorePubAck
+	s.XIgnorePubComp = connectionRequest.options.XIgnorePubComp
 
 	// Send CONNECT
 	log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
@@ -297,6 +300,10 @@ func (s *Session) handleMessages() {
 				switch msgType {
 				case PublishAckType:
 					s.processPublishAck(msg)
+				case PublishReceivedType:
+					s.processPublishReceived(msg)
+				case PublishCompleteType:
+					s.processPublishComplete(msg)
 				default:
 					// TODO: for now panic as this logic will not correctly read the message to clear for next
 					panic(fmt.Sprintf("Message Processing Loop: Unhandled message type %d - not yet implemented", msgType))
@@ -333,6 +340,55 @@ func (s *Session) processPublishAck(msg *GenericMessage) {
 	if s.XIgnorePubAck {
 		// Exceptional test behavior
 		log.Debugf("PUBACK(%d) Ignored", packetID)
+		return
+	}
+
+	// Packet is no longer waiting since this is QoS 1
+	s.inFlight.releaseWaiting(packetID)
+
+	// Mark packetID as available
+	s.inFlight.unsetBit(packetID)
+}
+
+// processPublishReceived - releases the message package and sends
+func (s *Session) processPublishReceived(msg *GenericMessage) {
+	if msg.fixedHeader>>4 != PublishReceivedType {
+		panic(fmt.Sprintf("processPublishReceived() got generic message of wrong type: %d", msg.fixedHeader>>4))
+	}
+	body := msg.body
+	if len(body) != 2 {
+		panic(fmt.Sprintf("PUBREC expects 2 bytes packet ID as the body - got %d", len(body)))
+	}
+	packetID := int(body[0])<<8 | int(body[1])
+
+	log.Debugf("PUBREC(%d) Received", packetID)
+	if s.XIgnorePubAck {
+		// Exceptional test behavior
+		log.Debugf("PUBREC(%d) Ignored", packetID)
+		return
+	}
+	var buffer bytes.Buffer
+	Encode16BitIntTo(packetID, &buffer)
+	releaseMsg := &GenericMessage{fixedHeader: PublishReleaseType<<4 | PublishReleaseReserved, body: buffer.Bytes()}
+	s.inFlight.replaceWaiting(packetID, releaseMsg)
+	s.toBroker <- releaseMsg
+}
+
+// processPublishComplete - releases the PUBREL message in fligt (final messag in QoS 2)
+func (s *Session) processPublishComplete(msg *GenericMessage) {
+	if msg.fixedHeader>>4 != PublishCompleteType {
+		panic(fmt.Sprintf("PublishCompleteType() got generic message of wrong type: %d", msg.fixedHeader>>4))
+	}
+	body := msg.body
+	if len(body) != 2 {
+		panic(fmt.Sprintf("PUBCOMP expects 2 bytes packet ID as the body - got %d", len(body)))
+	}
+	packetID := int(body[0])<<8 | int(body[1])
+
+	log.Debugf("PUBCOMP(%d) Received", packetID)
+	if s.XIgnorePubComp {
+		// Exceptional test behavior
+		log.Debugf("PUBCOMP(%d) Ignored", packetID)
 		return
 	}
 

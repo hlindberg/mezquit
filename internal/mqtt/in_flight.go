@@ -120,8 +120,23 @@ func (f *inFlight) releaseWaiting(packetID int) {
 	if theElement == nil {
 		log.Debugf("no registered packed for packed ID: %d", packetID)
 	}
-
 	f.waitingList.Remove(theElement)
+}
+
+// replaceWaiting replaces the message for the given packetID
+func (f *inFlight) replaceWaiting(packetID int, msg MessageWriter) {
+	log.Debugf("replaceWaiting(%d)", packetID)
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	if !f.getBit(packetID) {
+		panic("Cannot replace a packet that is not registered as waiting")
+	}
+	theElement := f.waitingIdx[packetID]
+	if theElement == nil {
+		log.Debugf("no registered packed for packed ID: %d", packetID)
+	}
+	// Replace
+	theElement.msg = msg
 }
 
 // eachWaitingPackage yields each packet to the given function - the intent is for a caller
