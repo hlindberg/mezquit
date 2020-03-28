@@ -21,6 +21,8 @@ var publishCmd = &cobra.Command{
 		p := &publisher{}
 		if TestQoS1Resend {
 			p.qos1ResendPublish()
+		} else if TestQoS2Resend {
+			p.qos2ResendPublish()
 		} else {
 			p.standardPublish()
 		}
@@ -34,10 +36,19 @@ var publishCmd = &cobra.Command{
 		if KeepAliveSeconds < 0 {
 			return fmt.Errorf("--keep_alive cannot be negative")
 		}
+		if TestQoS1Resend && TestQoS2Resend {
+			return fmt.Errorf("--test_qos1_resend and --test_qos2_resend cannot be used at the same time")
+		}
 		if TestQoS1Resend {
 			if QoS != 1 {
 				log.Debugf("QoS set to 1 since --test_qos1_resend was requested")
 				QoS = 1
+			}
+		}
+		if TestQoS2Resend {
+			if QoS != 1 {
+				log.Debugf("QoS set to 2 since --test_qos2_resend was requested")
+				QoS = 2
 			}
 		}
 		return nil
@@ -70,16 +81,19 @@ func (p *publisher) session(clientName string, conn net.Conn) *mqtt.Session {
 	return mqtt.NewSession(mqtt.ClientID(clientName), mqtt.InputOutput(conn))
 }
 
-func (p *publisher) connect(session *mqtt.Session, ignorePubAck bool, cleanSession bool) {
-	err := session.Connect(
+func (p *publisher) connect(session *mqtt.Session, options ...mqtt.ConnectOption) {
+	// TODO: Take ConnectOption... and apply those given as overrides
+	opts := []mqtt.ConnectOption{
 		mqtt.WillTopic(WillTopic),
 		mqtt.WillMessage([]byte(WillMessage)),
 		mqtt.WillQoS(WillQoS),
 		mqtt.WillRetain(WillRetain),
 		mqtt.KeepAliveSeconds(KeepAliveSeconds),
-		mqtt.XIgnorePubAck(ignorePubAck),
-		mqtt.CleanSession(cleanSession),
-	)
+	}
+	for _, o := range options {
+		opts = append(opts, o)
+	}
+	err := session.Connect(opts...)
 
 	if err != nil {
 		panic(err)
@@ -121,7 +135,7 @@ func (p *publisher) standardPublish() {
 	conn := p.dial()
 	clientName := p.clientName()
 	session := p.session(clientName, conn)
-	p.connect(session, false, true)
+	p.connect(session, mqtt.CleanSession(true))
 	p.publishGivenMessage(session)
 
 	if TestNoDisconnect {
@@ -138,31 +152,52 @@ func (p *publisher) qos1ResendPublish() {
 	conn := p.dial()
 	clientName := p.clientName()
 	session := p.session(clientName, conn)
-	p.connect(session, true, true) // ignore PUBACK, clean session
+	p.connect(session, mqtt.XIgnorePubAck(true), mqtt.CleanSession(true))
 	p.publishGivenMessage(session)
-
-	if TestNoDisconnect {
-		session.DisconnectWithoutMessage(1)
-	} else {
-		session.Disconnect(1)
-	}
-	// Done
+	p.disconnect(session)
 	conn.Close()
 
-	// Second Pass
+	// -- Second Pass
 	conn = p.dial()
 	// Set new input/output to second connect
 	session.ReEstablish(mqtt.InputOutput(conn))
-	p.connect(session, false, false) // process PUBACK, not clean session
+	p.connect(session, mqtt.XIgnorePubAck(false), mqtt.CleanSession(false))
+	p.disconnect(session)
+	conn.Close()
 
+}
+func (p *publisher) disconnect(session *mqtt.Session) {
 	if TestNoDisconnect {
 		session.DisconnectWithoutMessage(1)
 	} else {
 		session.Disconnect(1)
 	}
-	// Done
+}
+func (p *publisher) qos2ResendPublish() {
+	// -- First pass where PUBREC is ignored
+	conn := p.dial()
+	clientName := p.clientName()
+	session := p.session(clientName, conn)
+	p.connect(session, mqtt.XIgnorePubAck(true), mqtt.CleanSession(true)) // ignoring PUBACK also ignores PUBREC
+	p.publishGivenMessage(session)
+	p.disconnect(session)
 	conn.Close()
 
+	// -- Second Pass where PUBCOMP is ignored
+	conn = p.dial()
+	// Set new input/output to second connect
+	session.ReEstablish(mqtt.InputOutput(conn))
+	p.connect(session, mqtt.XIgnorePubAck(false), mqtt.XIgnorePubComp(true), mqtt.CleanSession(false)) // process PUBACK, not clean session
+	p.disconnect(session)
+	conn.Close()
+
+	// -- Third Pass
+	conn = p.dial()
+	// Set new input/output to second connect
+	session.ReEstablish(mqtt.InputOutput(conn))
+	p.connect(session, mqtt.XIgnorePubAck(false), mqtt.CleanSession(false)) // process PUBACK, not clean session
+	p.disconnect(session)
+	conn.Close()
 }
 
 // MQTTBroker is the MQTT host:port to dial
@@ -204,8 +239,11 @@ var WillRetain bool
 // TestNoDisconnect if true no DISCONNECT is sent thereby allowing WILL features to be tested
 var TestNoDisconnect bool
 
-// TestQoS1Resend if true no DISCONNECT is sent thereby allowing WILL features to be tested
+// TestQoS1Resend if true 2 phases are run, first with PUBACK ignored, then resending DUPs
 var TestQoS1Resend bool
+
+// TestQoS2Resend if true 3 phases are run, first ignoring PUBREC, then resending DUP, then ignoring PUBCOMP, then resending,
+var TestQoS2Resend bool
 
 func init() {
 	RootCmd.AddCommand(publishCmd)
@@ -242,4 +280,6 @@ func init() {
 	flags.BoolVarP(&TestQoS1Resend,
 		"test_qos1_resend", "", false, "Performs: CONNECT, send message(s), ignore PUBACK(s), DISCONNECT, CONNECT with clean=false, resend, DISCONNECT")
 
+	flags.BoolVarP(&TestQoS2Resend,
+		"test_qos2_resend", "", false, "Performs: 2phased ignore first PUBREC, then PUBCOM with redeliveries in between")
 }

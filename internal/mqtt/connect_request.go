@@ -277,12 +277,20 @@ func Password(value []byte) ConnectOption {
 	}
 }
 
-// XIgnorePubAck is an exceptional behavior flag that makes the session ignore all PUBACK
+// XIgnorePubAck is an exceptional behavior flag that makes the session ignore all PUBACK and PUBREC
 //
 func XIgnorePubAck(flag bool) ConnectOption {
 	return func(o *ConnectOptions) error {
 		o.XIgnorePubAck = flag
 		return nil
 	}
+}
 
+// XIgnorePubComp is an exceptional behavior flag that makes the session ignore all PUBCOMP
+//
+func XIgnorePubComp(flag bool) ConnectOption {
+	return func(o *ConnectOptions) error {
+		o.XIgnorePubComp = flag
+		return nil
+	}
 }
