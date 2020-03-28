@@ -151,7 +151,7 @@ func (r *ConnectRequest) IsCleanSession() bool {
 // a suitable string.
 //
 func DefaultConnectOptions() ConnectOptions {
-	return ConnectOptions{Level: 4, CleanSession: true, KeepAliveSeconds: 10, ClientName: "", WillRetain: false}
+	return ConnectOptions{Level: 4, CleanSession: true, KeepAliveSeconds: 10, ClientName: "", WillRetain: false, ConnectTimeOut: 10}
 }
 
 // ConnectOptions contains options for a ConnectRequest
@@ -167,6 +167,7 @@ type ConnectOptions struct {
 	WillRetain       bool
 	UserName         string
 	Password         *[]byte
+	ConnectTimeOut   int  // seconds to wait for a connect to complete (spec says should wait "reasonable time" and then close)
 	XIgnorePubAck    bool // eXceptional behavior - ignore PUBACKs and PUBRECs and let the set of inFligh messages grow
 	XIgnorePubComp   bool // eXceptional behavior - ignore PUBCOMPs and let the set of inFligh messages grow
 }
@@ -291,6 +292,14 @@ func XIgnorePubAck(flag bool) ConnectOption {
 func XIgnorePubComp(flag bool) ConnectOption {
 	return func(o *ConnectOptions) error {
 		o.XIgnorePubComp = flag
+		return nil
+	}
+}
+
+// ConnectTimeOut returns a ConnectOption setting the connection time out
+func ConnectTimeOut(timeoutSec int) ConnectOption {
+	return func(o *ConnectOptions) error {
+		o.ConnectTimeOut = timeoutSec
 		return nil
 	}
 }

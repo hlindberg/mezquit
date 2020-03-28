@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -25,6 +26,9 @@ const (
 	// DISCONNECTED Session state is when Session has been DISCONNECTED (and it is possible to reconnect)
 	DISCONNECTED
 )
+
+// ErrTIMEOUT is an error describing that a time out occured
+var ErrTIMEOUT = errors.New("TIMEOUT")
 
 // Session describes a client session that may span several connects to a MQTT Broker
 // It keeps track of package IDs "in flight" and a Client ID.
@@ -80,55 +84,72 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	s.XIgnorePubAck = connectionRequest.options.XIgnorePubAck
 	s.XIgnorePubComp = connectionRequest.options.XIgnorePubComp
 
-	// Send CONNECT
-	log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
+	// TODO: PROTECT WITH TIMEOUT FROM HERE
+	connectResult := make(chan error, 1)
+	timeOut := make(chan error, 1)
+	go func() {
+		// SPEC 3.1.1 states that if CONNACK does not arrive within reasonable time (left open) the client should
+		// close the connection. This is configurable as a ConnectOption.
+		//
+		time.Sleep(time.Duration(connectionRequest.options.ConnectTimeOut) * time.Second)
+		timeOut <- ErrTIMEOUT
+	}()
+	go func() {
+		// Send CONNECT
+		log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
 
-	msg := connectionRequest.makeMessage()
-	_, err := msg.WriteTo(s.options.Writer)
-	// TODO: Log the write in debug
-	if err != nil {
-		// TODO: Log this
+		msg := connectionRequest.makeMessage()
+		_, err := msg.WriteTo(s.options.Writer)
+		if err != nil {
+			log.Errorf("Error while writing CONNECT message: %s", err)
+			connectResult <- err
+		}
+
+		// Wait for CONNACK
+		// SPEC: The first packet sent by a broker on a CONNECT must be a CONNACK (thus it is ok here to wait on one here)
+
+		// TODO: When reading, should loop until getting all of the bytes. Timeout should be for getting all of them
+		response := make([]byte, 4)
+		n, err := s.options.Reader.Read(response)
+
+		if err != nil {
+			log.Errorf("Error while reading CONNACK message: %s", err)
+			connectResult <- err
+		}
+		if n != 4 {
+			connectResult <- fmt.Errorf("Expected to read 4 bytes from MQTT Reader but got %d", n)
+		}
+
+		if response[0] != ConnAckType<<4 {
+			connectResult <- fmt.Errorf("Did not get a CONNACK back from Connect - got %d", response[0])
+		}
+		if response[1] != 2 {
+			connectResult <- fmt.Errorf("Expected CONNACK length of 2 but got %d", response[1])
+		}
+
+		spFlagSet := false
+		if response[2] == 1 {
+			spFlagSet = true // TODO: What does this mean to a client?
+		}
+
+		if response[3] != ConnectionAccepted {
+			// TODO: This should translate the error return status to human readable text, not just include the status as a number
+			connectResult <- fmt.Errorf("Did not get ConnectionAccepted return status back - got %d", response[3])
+		}
+
+		log.Debugf("Broker -> CONNACK(sp=%v) received ok", spFlagSet)
+		connectResult <- nil
+	}()
+
+	// Wait for either error free connect or for timeout
+	select {
+	case err := <-timeOut:
 		return err
+	case err := <-connectResult:
+		if err != nil {
+			return err
+		}
 	}
-
-	// Wait for CONNACK
-	// SPEC: The first packet sent by a broker on a CONNECT must be a CONNACK (thus it is ok here to wait on one here)
-	//
-	// TODO: SPEC 3.1.1 states that if CONNACK does not arrive within reasonable time (left open) the client should
-	// close the connection. This could be specified in the Session (ConnectTimeOutSec).
-	// See here: https://forum.golangbridge.org/t/how-to-set-timeout-for-io-reader/5207
-	// If a timeout occurs, the caller must be informed to enable closing the connection and thus stopping a possibly blocked read
-	//
-	// TODO: When reading, should loop until getting all of the bytes. Timeout should be for getting all of them
-	response := make([]byte, 4)
-	n, err := s.options.Reader.Read(response)
-	if err != nil {
-		// TODO: Log this
-		return err
-	}
-	if n != 4 {
-		return fmt.Errorf("Expected to read 4 bytes from MQTT Reader but got %d", n)
-	}
-
-	if response[0] != ConnAckType<<4 {
-		return fmt.Errorf("Did not get a CONNACK back from Connect - got %d", response[0])
-	}
-	if response[1] != 2 {
-		return fmt.Errorf("Expected CONNACK length of 2 but got %d", response[1])
-	}
-
-	spFlagSet := false
-	if response[2] == 1 {
-		spFlagSet = true // TODO: What does this mean to a client?
-	}
-
-	if response[3] != ConnectionAccepted {
-		// TODO: This should translate the error return status to human readable text, not just include the status as a number
-		return fmt.Errorf("Did not get ConnectionAccepted return status back - got %d", response[3])
-	}
-
-	log.Debugf("Broker -> CONNACK(sp=%v) received ok", spFlagSet)
-
 	s.state = CONNECTED
 
 	// Start a lister goroutine that listens on the connection and a channel where a timeout can be received
