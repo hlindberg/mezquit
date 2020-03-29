@@ -30,7 +30,7 @@ const (
 // ErrTIMEOUT is an error describing that a time out occured
 var ErrTIMEOUT = errors.New("TIMEOUT")
 
-// Session describes a client session that may span several connects to a MQTT Broker
+// Session describes a client session that may span several connects to a MQTT Broker.
 // It keeps track of package IDs "in flight" and a Client ID.
 // It requires one io.Writer and one io.Reader to operate. It does not handle a Network connection - this is
 // the responsability of the caller (open/dial, close, reconnect, etc.)
@@ -66,7 +66,7 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	s.assertReaderWriter()
 
 	// Since go does not have mutex transitions read->write and vice versa a write lock is needed here
-	// since there can otherwise be reace conditions in the gap between releasing a read lock and aquiring a write lock.
+	// since there can otherwise be reace conditions in the gap between releasing a read lock and aquiring a write lock;
 	// meaning state could have changed. Instead this always aquires a write lock.
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -78,22 +78,29 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	}
 
 	// Create a request (override the client name by appending it - thus overwriting what user gave)
+	// Rationale: While this may seem odd - this is done to prevent reestablishing a client with in-flight under a different
+	// client ID - which would otherwise be possible if the ID is configurable per connect.
+	//
 	options = append(options, ClientName(s.options.ClientName))
 	connectionRequest := NewConnectRequest(options...)
 	s.initInFlight(connectionRequest.IsCleanSession())
 	s.XIgnorePubAck = connectionRequest.options.XIgnorePubAck
 	s.XIgnorePubComp = connectionRequest.options.XIgnorePubComp
 
-	// TODO: PROTECT WITH TIMEOUT FROM HERE
+	// SPEC 3.1.1 states that if CONNACK does not arrive within reasonable time (left open) the client should
+	// close the connection. This is configurable as a ConnectOption.
+	// This is implemented with two channels - a timeOut channel and a connectResult channel.
+	//
 	connectResult := make(chan error, 1)
 	timeOut := make(chan error, 1)
+
+	// -- timeout producer
 	go func() {
-		// SPEC 3.1.1 states that if CONNACK does not arrive within reasonable time (left open) the client should
-		// close the connection. This is configurable as a ConnectOption.
-		//
 		time.Sleep(time.Duration(connectionRequest.options.ConnectTimeOut) * time.Second)
 		timeOut <- ErrTIMEOUT
 	}()
+
+	// -- connect/connack handler
 	go func() {
 		// Send CONNECT
 		log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
@@ -106,9 +113,9 @@ func (s *Session) Connect(options ...ConnectOption) error {
 		}
 
 		// Wait for CONNACK
-		// SPEC: The first packet sent by a broker on a CONNECT must be a CONNACK (thus it is ok here to wait on one here)
+		// SPEC: The first packet sent by a broker on a CONNECT must be a CONNACK (thus waiting on it here)
 
-		// TODO: When reading, should loop until getting all of the bytes. Timeout should be for getting all of them
+		// TODO: When reading, should loop until getting all of the bytes.
 		response := make([]byte, 4)
 		n, err := s.options.Reader.Read(response)
 
@@ -152,17 +159,15 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	}
 	s.state = CONNECTED
 
-	// Start a lister goroutine that listens on the connection and a channel where a timeout can be received
-	// signalling that it should stop after that timeout (or 0).
+	// -- Start a broker lister goroutine handling all reads from broker
 	log.Debugf("Session: starting handleMessages()")
 	s.handleMessages()
 
-	// Start a send to broker goroutine that listens on the `toBroker` queue and writes them in order
-	//
+	// -- Start a send to broker goroutine handling all write to broker
 	log.Debugf("Session: Starting startSendToBroker()")
 	s.startSendToBroker()
 
-	// If this is a reconnect (non clean session, resend messages)
+	// -- If this is a reconnect (non clean session), resend messages
 	if !connectionRequest.IsCleanSession() {
 		s.inFlight.eachWaitingPacket(func(packetID int, msg MessageWriter) {
 			log.Debugf("Resending message with packetID: %d", packetID)
@@ -174,7 +179,7 @@ func (s *Session) Connect(options ...ConnectOption) error {
 
 // DisconnectWithoutMessage performs flushing of messages just like Disconnect() but does not send a
 // DISCONNECT message to the broker.
-// This is used to test this scenario.
+// This is used to test unclean disconnect.
 //
 func (s *Session) DisconnectWithoutMessage(timeout int) error {
 	log.Debugf("DisconnectWithoutMessage()")
@@ -212,7 +217,8 @@ func (s *Session) DisconnectWithoutMessage(timeout int) error {
 // or the timeout occurs. If `drain` is set to `false`, processing of incoming ACKS will stop as soon as possible and
 // the DISCONNECT is then sent.
 //
-// TODO: Block posts and subscriptions after Disconnect is called
+// Note: While the Disconnect is in progress Publish is blocked since it aquires the mutex. Once the mutex is released
+// a Publish requires a CONNECTED state - which the session will not have after the DISCONNECT.
 //
 func (s *Session) Disconnect(timeout int) error {
 	log.Debugf("Disconnect()")
@@ -260,23 +266,25 @@ func (s *Session) startSendToBroker() {
 	s.toBroker = make(chan MessageWriter, 100)
 	go func() {
 		for message := range s.toBroker {
-			message.WriteTo(s.options.Writer)
+			message.WriteTo(s.options.Writer) // TODO: error is ignored here
 		}
-		s.drained <- true // signal all written
+		s.drained <- true // signal all written TODO: change to writing error/nil instead
 	}()
 }
 
-// HandleMessages starts go routines that listens for incoming ACK and performs the required housekeeping
+// handleMessages starts go routines that listens for incoming ACK and performs the required housekeeping
 // of messages in-flight.
 // Note that a client should call `Disconnect` for an orderly disconnect - that will also optionally do a drain with
 // a timeout.
 //
 func (s *Session) handleMessages() {
 
+	// -- handler go routine
 	go func() {
 		timeout := make(chan bool)
 		messages := make(chan *GenericMessage, 100)
 
+		// -- reader go routine
 		go func() {
 			fixedHeader := make([]byte, 1)
 			for {
@@ -334,6 +342,8 @@ func (s *Session) handleMessages() {
 	}()
 }
 
+// readMessage slurps the rest of a message after reading the first fixed header byte elsewhere
+//
 func (s *Session) readMessage(fixedHeaderByte byte) (*GenericMessage, error) {
 	remainingLength, err := DecodeVariableInt(s.options.Reader)
 	if err != nil {
@@ -347,6 +357,10 @@ func (s *Session) readMessage(fixedHeaderByte byte) (*GenericMessage, error) {
 	return &msg, err
 }
 
+// processPublishAck performs the required actions when receiving a PUBACK:
+//   - the message in-flight is released
+//   - the packet ID it used is released
+//
 func (s *Session) processPublishAck(msg *GenericMessage) {
 	if msg.fixedHeader>>4 != PublishAckType {
 		panic(fmt.Sprintf("processPublishAck() got generic message of wrong type: %d", msg.fixedHeader>>4))
@@ -371,7 +385,10 @@ func (s *Session) processPublishAck(msg *GenericMessage) {
 	s.inFlight.unsetBit(packetID)
 }
 
-// processPublishReceived - releases the message package and sends
+// processPublishReceived performs the required actions when receiving a PUBREC
+//   - the message in-flight is replaced with a PUBREL message
+//   - the PUBREL message is queued for sending to broker
+//
 func (s *Session) processPublishReceived(msg *GenericMessage) {
 	if msg.fixedHeader>>4 != PublishReceivedType {
 		panic(fmt.Sprintf("processPublishReceived() got generic message of wrong type: %d", msg.fixedHeader>>4))
@@ -395,7 +412,12 @@ func (s *Session) processPublishReceived(msg *GenericMessage) {
 	s.toBroker <- releaseMsg
 }
 
-// processPublishComplete - releases the PUBREL message in fligt (final messag in QoS 2)
+// processPublishComplete performs the required actions when receiving a PUBCOMP
+//   - the message in-flight is released
+//   - the packet ID is released
+//
+// This is the end of the QoS 2 message sequence
+//
 func (s *Session) processPublishComplete(msg *GenericMessage) {
 	if msg.fixedHeader>>4 != PublishCompleteType {
 		panic(fmt.Sprintf("PublishCompleteType() got generic message of wrong type: %d", msg.fixedHeader>>4))
@@ -413,7 +435,7 @@ func (s *Session) processPublishComplete(msg *GenericMessage) {
 		return
 	}
 
-	// Packet is no longer waiting since this is QoS 1
+	// Packet is no longer waiting since this is QoS 2
 	s.inFlight.releaseWaiting(packetID)
 
 	// Mark packetID as available
