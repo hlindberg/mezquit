@@ -1,7 +1,6 @@
 package mqtt
 
 import (
-	"bytes"
 	"io"
 	"testing"
 
@@ -18,12 +17,12 @@ import (
 // Cannot Disconnect when not Connected (although INITIAL is fine - since it never was connected - does nothing)
 //
 func Test_Session_Connect_and_Disconnect_QoS_0_immediate(t *testing.T) {
-	connectResponse := testhelperConnectionAccepted()
-	reader := bytes.NewReader(connectResponse)
-	var writer bytes.Buffer
+	conn := NewMockConnection()
+	_, err := conn.RemoteWrite(testhelperConnectionAccepted())
+	testutils.CheckNotError(err, t)
 
-	session := NewSession(ClientID("MqttUnitTest"), Input(reader), Output(&writer))
-	err := session.Connect()
+	session := NewSession(ClientID("MqttUnitTest"), Connection(conn))
+	err = session.Connect()
 	testutils.CheckNotError(err, t)
 
 	// Immediate disconnect
@@ -32,12 +31,13 @@ func Test_Session_Connect_and_Disconnect_QoS_0_immediate(t *testing.T) {
 
 	// Check that Connect and Disconnect was emitted
 	// CONNECT
-	testhelperConsumeConnect(&writer, t)
+	theRemoteSide := conn.Remote()
+	testhelperConsumeConnect(theRemoteSide, t)
 
-	firstByte, err := writer.ReadByte()
+	firstByte, err := theRemoteSide.ReadByte()
 	testutils.CheckNotError(err, t)
 	testutils.CheckEqual(DisconnectType<<4, int(firstByte), t)
-	lengthByte, err := writer.ReadByte()
+	lengthByte, err := theRemoteSide.ReadByte()
 	testutils.CheckNotError(err, t)
 	testutils.CheckEqual(byte(0), lengthByte, t)
 }

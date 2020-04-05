@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -106,7 +107,7 @@ func (s *Session) Connect(options ...ConnectOption) error {
 		log.Debugf("Broker <- CONNECT(%s)", connectionRequest.options.ClientName)
 
 		msg := connectionRequest.makeMessage()
-		_, err := msg.WriteTo(s.options.Writer)
+		_, err := msg.WriteTo(s.options.Conn)
 		if err != nil {
 			log.Errorf("Error while writing CONNECT message: %s", err)
 			connectResult <- err
@@ -115,9 +116,8 @@ func (s *Session) Connect(options ...ConnectOption) error {
 		// Wait for CONNACK
 		// SPEC: The first packet sent by a broker on a CONNECT must be a CONNACK (thus waiting on it here)
 
-		// TODO: When reading, should loop until getting all of the bytes.
 		response := make([]byte, 4)
-		n, err := s.options.Reader.Read(response)
+		n, err := io.ReadFull(s.options.Conn, response)
 
 		if err != nil {
 			log.Errorf("Error while reading CONNACK message: %s", err)
@@ -171,7 +171,7 @@ func (s *Session) Connect(options ...ConnectOption) error {
 	if !connectionRequest.IsCleanSession() {
 		s.inFlight.eachWaitingPacket(func(packetID int, msg MessageWriter) {
 			log.Debugf("Resending message with packetID: %d", packetID)
-			msg.WriteDupTo(s.options.Writer)
+			msg.WriteDupTo(s.options.Conn)
 		})
 	}
 	return nil
@@ -266,7 +266,7 @@ func (s *Session) startSendToBroker() {
 	s.toBroker = make(chan MessageWriter, 100)
 	go func() {
 		for message := range s.toBroker {
-			message.WriteTo(s.options.Writer) // TODO: error is ignored here
+			message.WriteTo(s.options.Conn) // TODO: error is ignored here
 		}
 		s.drained <- true // signal all written TODO: change to writing error/nil instead
 	}()
@@ -288,7 +288,7 @@ func (s *Session) handleMessages() {
 		go func() {
 			fixedHeader := make([]byte, 1)
 			for {
-				n, err := io.ReadFull(s.options.Reader, fixedHeader)
+				n, err := io.ReadFull(s.options.Conn, fixedHeader)
 				if err != nil {
 					if err == io.EOF || n == 0 {
 						log.Debugf("Read Loop: EOF on broker connection - stopped reading")
@@ -345,12 +345,12 @@ func (s *Session) handleMessages() {
 // readMessage slurps the rest of a message after reading the first fixed header byte elsewhere
 //
 func (s *Session) readMessage(fixedHeaderByte byte) (*GenericMessage, error) {
-	remainingLength, err := DecodeVariableInt(s.options.Reader)
+	remainingLength, err := DecodeVariableInt(s.options.Conn)
 	if err != nil {
 		return nil, err
 	}
 	msg := GenericMessage{fixedHeader: fixedHeaderByte, body: make([]byte, remainingLength)}
-	n, err := io.ReadFull(s.options.Reader, msg.body)
+	n, err := io.ReadFull(s.options.Conn, msg.body)
 	if n != remainingLength {
 		err = fmt.Errorf("Expected to read %d bytes remaining length of message but got %d", remainingLength, n)
 	}
@@ -466,8 +466,8 @@ func (s *Session) Publish(options ...PublishOption) error {
 }
 
 func (s *Session) assertReaderWriter() {
-	if s.options.Reader == nil || s.options.Writer == nil {
-		panic("Session requires both a Reader and a Writer to operate")
+	if s.options.Conn == nil {
+		panic("Session requires a net.Conn Connection to operate")
 	}
 }
 
@@ -475,8 +475,7 @@ func (s *Session) assertReaderWriter() {
 //
 type SessionOptions struct {
 	ClientName string
-	Reader     io.Reader
-	Writer     io.Writer
+	Conn       net.Conn
 }
 
 // DefaultSessionOptions returns the defaults options for a session
@@ -533,27 +532,10 @@ func ClientID(clientName string) SessionOption {
 	}
 }
 
-// Input returns a SessionOption for the given io.Reader
-func Input(reader io.Reader) SessionOption {
+// Connection returns a SessionOption for the given io.Reader
+func Connection(conn net.Conn) SessionOption {
 	return func(o *SessionOptions) error {
-		o.Reader = reader
-		return nil
-	}
-}
-
-// Output returns a SessionOption for the given io.Writer
-func Output(writer io.Writer) SessionOption {
-	return func(o *SessionOptions) error {
-		o.Writer = writer
-		return nil
-	}
-}
-
-// InputOutput returns a SessionOption for the given io.ReadWriter, it sets both Reader and Writer
-func InputOutput(rw io.ReadWriter) SessionOption {
-	return func(o *SessionOptions) error {
-		o.Reader = rw
-		o.Writer = rw
+		o.Conn = conn
 		return nil
 	}
 }

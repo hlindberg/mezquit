@@ -78,7 +78,7 @@ func (p *publisher) clientName() string {
 }
 
 func (p *publisher) session(clientName string, conn net.Conn) *mqtt.Session {
-	return mqtt.NewSession(mqtt.ClientID(clientName), mqtt.InputOutput(conn))
+	return mqtt.NewSession(mqtt.ClientID(clientName), mqtt.Connection(conn))
 }
 
 func (p *publisher) connect(session *mqtt.Session, options ...mqtt.ConnectOption) {
@@ -160,7 +160,7 @@ func (p *publisher) qos1ResendPublish() {
 	// -- Second Pass
 	conn = p.dial()
 	// Set new input/output to second connect
-	session.ReEstablish(mqtt.InputOutput(conn))
+	session.ReEstablish(mqtt.Connection(conn))
 	p.connect(session, mqtt.XIgnorePubAck(false), mqtt.CleanSession(false))
 	p.disconnect(session)
 	conn.Close()
@@ -186,7 +186,7 @@ func (p *publisher) qos2ResendPublish() {
 	// -- Second Pass where PUBCOMP is ignored
 	conn = p.dial()
 	// Set new input/output to second connect
-	session.ReEstablish(mqtt.InputOutput(conn))
+	session.ReEstablish(mqtt.Connection(conn))
 	p.connect(session, mqtt.XIgnorePubAck(false), mqtt.XIgnorePubComp(true), mqtt.CleanSession(false)) // process PUBACK, not clean session
 	p.disconnect(session)
 	conn.Close()
@@ -194,7 +194,7 @@ func (p *publisher) qos2ResendPublish() {
 	// -- Third Pass
 	conn = p.dial()
 	// Set new input/output to second connect
-	session.ReEstablish(mqtt.InputOutput(conn))
+	session.ReEstablish(mqtt.Connection(conn))
 	p.connect(session, mqtt.XIgnorePubAck(false), mqtt.CleanSession(false)) // process PUBACK, not clean session
 	p.disconnect(session)
 	conn.Close()
