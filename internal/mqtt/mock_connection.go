@@ -263,6 +263,41 @@ func (c *MockConnection) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// RemoteIO is an interface for operations on what MockConnection.Remote() returns
+type RemoteIO interface {
+	io.ReadWriter
+	io.ByteReader
+}
+
+// Remote is a io.ReadWriter that adapts the "remote" end of a MockConnection to
+// io.ReadWriter
+type Remote struct {
+	conn *MockConnection
+}
+
+func (r *Remote) Read(b []byte) (int, error) {
+	return r.conn.RemoteRead(b)
+}
+
+func (r *Remote) Write(b []byte) (int, error) {
+	return r.conn.RemoteWrite(b)
+}
+
+// ReadByte reads one byte - implements io.ByteReader
+func (r *Remote) ReadByte() (byte, error) {
+	b := make([]byte, 1)
+	n, err := r.conn.RemoteRead(b)
+	if err != nil || n != 1 {
+		return 0, err
+	}
+	return b[0], nil
+}
+
+// Remote returns a io.ReadWriter for the remote end of this MockConnetion
+func (c *MockConnection) Remote() RemoteIO {
+	return &Remote{conn: c}
+}
+
 // TimeoutError is returned for an expired deadline.
 // It implements net.Error interface
 // This type is needed because the error actually returned from net.Conn is an internal data type
