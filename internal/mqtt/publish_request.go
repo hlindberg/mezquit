@@ -3,7 +3,8 @@ package mqtt
 import (
 	"bytes"
 	"fmt"
-	"log"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // PublishRequest describes a MQTT Publish
